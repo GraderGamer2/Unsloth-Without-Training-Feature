@@ -213,7 +213,7 @@ for forbidden in \
   'libXrender.so*' 'libXcomposite.so*' 'libXdamage.so*' \
   'libXinerama.so*' 'libXau.so*' 'libXdmcp.so*' 'libxshmfence.so*' \
   'libwayland-*.so*' 'libasound.so*' 'libpulse*.so*' \
-  'libnvidia-*.so*' \
+  'libnvidia-*.so*' 'libgstnvcodec.so*' \
   'libnghttp2.so*' 'libcurl*.so*' 'libstdc++.so*' 'libgcc_s.so*'; do
   if found="$(find "$appdir" \( -type f -o -type l \) -name "$forbidden" -print -quit)" && [[ -n "$found" ]]; then
     echo "Complete AppImage must leave host runtime component unbundled: $found" >&2

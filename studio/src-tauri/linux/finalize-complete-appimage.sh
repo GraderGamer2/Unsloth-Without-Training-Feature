@@ -46,7 +46,7 @@ host_patterns=(
   'libXinerama.so*' 'libXau.so*' 'libXdmcp.so*' 'libxshmfence.so*'
   'libwayland-*.so*' 'libasound.so*' 'libpulse*.so*'
   # Keep libva and libvdpau so libgstlibav can load without host VA-API.
-  'libnvidia-*.so*'
+  'libnvidia-*.so*' 'libgstnvcodec.so*'
   'libstdc++.so*' 'libgcc_s.so*' 'libnghttp2.so*' 'libcurl*.so*'
 )
 for pattern in "${host_patterns[@]}"; do
