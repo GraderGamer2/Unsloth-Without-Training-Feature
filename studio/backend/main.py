@@ -13,29 +13,29 @@ from typing import Any, Optional
 
 os.environ["PYTHONWARNINGS"] = "ignore"
 
-# PCI_BUS_ID before any CUDA context so torch indices match nvidia-smi; setdefault lets override win.
-os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
-
-# Same ROCm AOTriton opt-in as unsloth/__init__.py, for a backend that defers importing torch;
-# spawned workers inherit it. `setdefault` preserves an explicit override, including "0".
-os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
-
-# Desktop GUI env drops AMD HSA_OVERRIDE_GFX_VERSION and USE_CK, which HSA reads at first GPU use.
 _backend_dir = str(_Path(__file__).parent)
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
-try:
-    from utils.desktop_shell_env import import_rocm_env_from_login_shell as _import_rocm_env
-    _import_rocm_env()
-except Exception:
-    pass
+from utils.gpu_policy import personal_vulkan
 
-# Triton-only flash-attn (RDNA3/4) imports only with its backend switch; set before any flash_attn import.
-try:
-    from utils.rocm_flash_attn import default_triton_amd_env as _default_triton_amd_env
-    _default_triton_amd_env()
-except Exception:
-    pass
+if personal_vulkan():
+    from loggers.config import LogConfig as _StartupLogConfig
+    _StartupLogConfig.setup_logging()
+else:
+    # Match torch device indices to the driver inventory and keep the login shell's ROCm settings.
+    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+    os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
+    try:
+        from utils.desktop_shell_env import import_rocm_env_from_login_shell as _import_rocm_env
+        _import_rocm_env()
+    except Exception:
+        pass
+
+    try:
+        from utils.rocm_flash_attn import default_triton_amd_env as _default_triton_amd_env
+        _default_triton_amd_env()
+    except Exception:
+        pass
 
 # normalize allocator booleans before torch parses them; spawned workers inherit the environment.
 from utils.allocator_conf import normalize_allocator_conf as _normalize_allocator_conf
@@ -1079,7 +1079,8 @@ async def lifespan(app: FastAPI):
 
     # Embeddings stay cold until ingestion or retrieval actually requests vectors.
     _start_helper_precache_if_enabled()
-    _start_offline_docs_refresh_if_due()
+    if not personal_vulkan():
+        _start_offline_docs_refresh_if_due()
 
     from core.inference.audio_inputs import start_sweeper as _start_audio_input_sweeper
 
@@ -1260,7 +1261,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title = "Unsloth UI Backend",
     version = UNSLOTH_VERSION,
-    description = "Backend API for Unsloth UI - Training and Model Management",
+    description = "Unsloth inference API" if personal_vulkan() else "Backend API for Unsloth UI - Training and Model Management",
     lifespan = lifespan,
     # Docs UIs re-registered on vendored assets: the CDN copies would run on the token origin.
     docs_url = None,
@@ -1320,7 +1321,28 @@ logger = LogConfig.setup_logging(
     env = os.getenv("ENVIRONMENT_TYPE", "production"),
 )
 
-app.add_middleware(LoggingMiddleware)
+if not personal_vulkan():
+    app.add_middleware(LoggingMiddleware)
+
+if personal_vulkan():
+    @app.middleware("http")
+    async def unavailable_desktop_features(request: Request, call_next):
+        path = request.url.path
+        unavailable = (
+            "/api/train",
+            "/api/export",
+            "/api/engines",
+            "/api/npu",
+            "/v1/fine_tuning",
+            "/api/settings/offline-docs",
+            "/api/settings/generation-presets/training",
+            "/docs",
+            "/redoc",
+            "/docs-assets",
+        )
+        if any(path == prefix or path.startswith(prefix + "/") for prefix in unavailable):
+            return JSONResponse({"detail": "Not available in this build."}, status_code = 404)
+        return await call_next(request)
 
 from utils.first_response_gate import FirstResponseGateMiddleware  # noqa: E402
 
@@ -1610,7 +1632,7 @@ async def openapi_json(request: Request):
     return Response(content = body, media_type = JSONResponse.media_type)
 
 
-if _DOCS_ASSETS_DIR.is_dir():
+if not personal_vulkan() and _DOCS_ASSETS_DIR.is_dir():
     app.mount(
         _DOCS_ASSETS_URL,
         StaticFiles(directory = _DOCS_ASSETS_DIR),
@@ -2247,7 +2269,8 @@ app.include_router(
     prefix = "/api/accounts",
     tags = ["accounts"],
 )
-app.include_router(training_router, prefix = "/api/train", tags = ["training"])
+if training_router is not None:
+    app.include_router(training_router, prefix = "/api/train", tags = ["training"])
 app.include_router(models_router, prefix = "/api/models", tags = ["models"])
 app.include_router(chat_history_router, prefix = "/api/chat", tags = ["chat"])
 app.include_router(chat_export_router, prefix = "/api/chat-export", tags = ["chat"])
@@ -2268,7 +2291,8 @@ app.include_router(video_restyle_router, prefix = "/api/inference", tags = ["inf
 app.include_router(video_openai_router, prefix = "/v1", tags = ["openai-compat"])
 
 app.include_router(inference_router, prefix = "/v1", tags = ["openai-compat"])
-app.include_router(openai_fine_tuning_router, prefix = "/v1", tags = ["openai-compat"])
+if openai_fine_tuning_router is not None:
+    app.include_router(openai_fine_tuning_router, prefix = "/v1", tags = ["openai-compat"])
 app.include_router(systemone_router, prefix = "/v1", tags = ["systemone"])
 # Must register before the SPA catch-all or /props and /version return index.html.
 app.include_router(llama_compat_router, tags = ["openai-compat"])
@@ -2289,13 +2313,16 @@ app.include_router(profile_stats_router, prefix = "/api/profile", tags = ["profi
 app.include_router(datasets_router, prefix = "/api/datasets", tags = ["datasets"])
 app.include_router(data_recipe_router, prefix = "/api/data-recipe", tags = ["data-recipe"])
 app.include_router(llama_router, prefix = "/api/llama", tags = ["llama"])
-app.include_router(engines_router, prefix = "/api/engines", tags = ["engines"])
+if not personal_vulkan():
+    app.include_router(engines_router, prefix = "/api/engines", tags = ["engines"])
 app.include_router(whisper_router, prefix = "/api/whisper", tags = ["whisper"])
 app.include_router(npu_router, prefix = "/api/npu", tags = ["npu"])
-app.include_router(export_router, prefix = "/api/export", tags = ["export"])
+if export_router is not None:
+    app.include_router(export_router, prefix = "/api/export", tags = ["export"])
 app.include_router(external_import_router, prefix = "/api/import", tags = ["import"])
 app.include_router(rag_router, prefix = "/api/rag", tags = ["rag"])
-app.include_router(training_history_router, prefix = "/api/train", tags = ["training-history"])
+if training_history_router is not None:
+    app.include_router(training_history_router, prefix = "/api/train", tags = ["training-history"])
 app.include_router(hub_inventory_router, prefix = "/api/hub", tags = ["hub"])
 app.include_router(hub_datasets_router, prefix = "/api/hub/datasets", tags = ["hub"])
 app.include_router(picker_templates_router, prefix = "/api/picker", tags = ["picker"])

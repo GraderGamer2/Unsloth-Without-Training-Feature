@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
+import { PERSONAL_VULKAN } from "@/config/personal-build";
+import { createRoute, lazyRouteComponent, redirect } from "@tanstack/react-router";
 import { requireAuth } from "../auth-guards";
 import { Route as rootRoute } from "./__root";
 
-const ExportPage = lazyRouteComponent(
+const ExportPage = PERSONAL_VULKAN ? () => null : lazyRouteComponent(
   () => import("@/features/export/export-page"),
   "ExportPage",
 );
@@ -21,7 +22,10 @@ export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: "/export",
   staticData: { titleKey: "shell.navigation.export" },
-  beforeLoad: () => requireAuth(),
+  beforeLoad: () => {
+    if (PERSONAL_VULKAN) throw redirect({ to: "/chat" });
+    return requireAuth();
+  },
   validateSearch: (search: Record<string, unknown>): ExportSearch => ({
     run: typeof search.run === "string" ? search.run : undefined,
     imageLora:

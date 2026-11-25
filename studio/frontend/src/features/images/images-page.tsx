@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { modelErrorToast } from "@/lib/model-error-toast";
 import { generationFailureLogsAction } from "@/features/settings/lib/view-logs-action";
 import { isRetiredCopySnapshot, readImageModel, retiredSnapshotAsLoaded, rememberImageModel, matchesRememberedModel, componentFilesMatch, componentFieldsOwnerAfterLoad, componentFilesForModel, forgetStaleImageComponents, forgetStaleResidentComponents, recalledComponentFiles, reconcileRememberedComponents, rememberLoadedImageComponents, recoveredComponentFields, seedImageComponents, rememberPendingImageLoad, clearPendingImageLoad, finishedLoadTarget, type ImageComponentFiles, type ImageModelKey, type RememberedImageModel } from "./image-model-recall";
@@ -2013,7 +2014,7 @@ export function ImagesPage({
   const heldLoraRecipe = useRef<{ preset: StepRecipe; model: StepRecipe } | null>(null);
   const [focusLoraRow, setFocusLoraRow] = useState<number | null>(null);
   // Page mode: "create" is the generation workspace, "train" the LoRA training workspace.
-  const pageMode = useImageWorkflowStore((s) => s.pageMode);
+  const pageMode = useImageWorkflowStore((s) => PERSONAL_VULKAN ? "create" : s.pageMode);
   // Mounted on first visit, then hidden rather than unmounted, so switching to Create keeps the training form.
   const [trainMounted, setTrainMounted] = useState(false);
   if (pageMode === "train" && !trainMounted) setTrainMounted(true);
@@ -6710,7 +6711,7 @@ export function ImagesPage({
               className="h-[calc(34px*var(--ui-space-scale,1))] [&>button]:h-[calc(34px*var(--ui-space-scale,1))] [&>button]:px-7 @[68rem]:[&>button]:px-14 [[data-media-header-tight]_&]:[&>button]:px-4 @max-[30rem]:[&>button]:px-2.5 @max-[30rem]:[&>button>[data-pill-tab-label]]:sr-only"
               tabs={[
                 { value: "create", label: "Create", icon: <HugeiconsIcon icon={SparklesIcon} className="size-3.5" /> },
-                { value: "train", label: "Train", icon: <HugeiconsIcon icon={TestTubeOutlineIcon} className="size-3.5" /> },
+                ...(!PERSONAL_VULKAN ? [{ value: "train", label: "Train", icon: <HugeiconsIcon icon={TestTubeOutlineIcon} className="size-3.5" /> }] : []),
               ]}
             />
           </div>
@@ -6725,7 +6726,7 @@ export function ImagesPage({
           </MediaHeaderActions>
         </div>
       </div>
-      {trainMounted && (
+      {!PERSONAL_VULKAN && trainMounted && (
         <div className={pageMode === "train" ? "contents" : "hidden"} inert={pageMode !== "train" || undefined}>
           <DiffusionTrainPanel
             active={active && pageMode === "train"}

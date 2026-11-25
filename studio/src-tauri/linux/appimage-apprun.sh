@@ -173,8 +173,10 @@ fi
 # Overwrite any inherited value so a relaunch re-decides; the app reads it to pick its plan.
 UNSLOTH_APPIMAGE_WEBKIT_MODE="$unsloth_webkit_mode"
 export UNSLOTH_APPIMAGE_WEBKIT_MODE
-printf 'unsloth-studio: AppImage WebKitGTK runtime=%s (%s)\n' \
-  "$unsloth_webkit_mode" "$unsloth_webkit_detail" >&2
+if [ ! -d "$APPDIR/usr/lib/Unsloth/personal-runtimes" ]; then
+  printf 'unsloth-studio: AppImage WebKitGTK runtime=%s (%s)\n' \
+    "$unsloth_webkit_mode" "$unsloth_webkit_detail" >&2
+fi
 
 # A relaunch inherits this launch's atk-bridge default; drop it so the new launch re-decides.
 if [ -n "${UNSLOTH_APPIMAGE_NO_AT_BRIDGE:-}" ]; then
@@ -190,7 +192,9 @@ if [ "$unsloth_webkit_mode" = bundled ]; then
       NO_AT_BRIDGE=1
       UNSLOTH_APPIMAGE_NO_AT_BRIDGE=1
       export NO_AT_BRIDGE UNSLOTH_APPIMAGE_NO_AT_BRIDGE
-      printf 'unsloth-studio: atk-bridge off on KDE (#15260); set NO_AT_BRIDGE=0 to keep it\n' >&2
+      if [ ! -d "$APPDIR/usr/lib/Unsloth/personal-runtimes" ]; then
+        printf 'unsloth-studio: atk-bridge off on KDE (#15260); set NO_AT_BRIDGE=0 to keep it\n' >&2
+      fi
     fi
     ;;
   esac

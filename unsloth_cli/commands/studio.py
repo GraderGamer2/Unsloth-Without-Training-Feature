@@ -5111,6 +5111,7 @@ def desktop_capabilities(
         "supports_desktop_backend_ownership": True,
         "supports_fixed_desktop_storage": True,
         "supports_amd_desktop": True,
+        "supports_personal_vulkan": True,
         # Did the install finish and are the backend boot deps still there.
         "studio_install_ok": bool(state["ok"]),
         "studio_install_reason": state["reason"],

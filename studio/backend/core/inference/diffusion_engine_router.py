@@ -18,6 +18,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from utils.gpu_policy import personal_vulkan
+
 from core.inference.diffusion_device import diffusion_target_is_cpu, resolve_diffusion_device_target
 from core.inference.diffusion_families import (
     DiffusionFamily,
@@ -63,7 +65,7 @@ _DISABLE_TOKENS = frozenset({"0", "off", "false", "no"})
 _ENABLE_TOKENS = frozenset({"1", "on", "true", "yes"})
 
 # Force-native GPU loads only: without it the installer defaults to "cpu" and runs on CPU.
-_INSTALL_ACCELERATOR = {"rocm": "rocm", "cuda": "cuda", "xpu": "vulkan"}
+_INSTALL_ACCELERATOR = {"rocm": "rocm", "cuda": "cuda", "xpu": "vulkan", "vulkan": "vulkan"}
 
 
 def _install_accelerator_for(backend: str) -> str:
@@ -394,6 +396,8 @@ def image_install_accelerator(backend: str) -> str:
     """The sd.cpp build the IMAGE engine wants: the off-torch card's when one is set, else torch's,
     else Vulkan for an eligible AMD or Intel GPU, or CUDA beside an NVIDIA card llama.cpp already
     renders on. Video keeps ``_install_accelerator_for``, since torch places its loads."""
+    if personal_vulkan():
+        return "vulkan"
     off_torch = off_torch_sd_cpp_device(backend)
     if off_torch is not None:
         return off_torch.accelerator
@@ -1049,7 +1053,7 @@ def select_and_activate_engine(
         # Before lora_guard, so a CPU-only GGUF gets the actionable reason.
         raise ValueError(cpu_gguf_refusal(reason))
     lora_guard(choice)
-    if requested == ENGINE_SD_CPP or native_gguf_only(fam, model_kind):
+    if personal_vulkan() or requested == ENGINE_SD_CPP or native_gguf_only(fam, model_kind):
         # Refuse before anything unloads rather than silently fall back to diffusers.
         raise ValueError(f"The native sd.cpp engine cannot load this model here: {reason}.")
     if before_fallback is not None:
@@ -1183,6 +1187,8 @@ def refuse_engine_pick(
     """ValueError for an explicit engine pick that cannot serve this load, checked without any side effect. The
     binary-dependent native refusal comes later, from selection itself, still before anything is unloaded."""
     requested = _requested_engine(engine)
+    if personal_vulkan() and (model_kind != "gguf" or requested == ENGINE_DIFFUSERS):
+        raise ValueError("Select a GGUF image model for this Vulkan build.")
     if requested == ENGINE_SD_CPP:
         if model_kind and model_kind != "gguf":
             raise ValueError("The native sd.cpp engine loads GGUF models only.")

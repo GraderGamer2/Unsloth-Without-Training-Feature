@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import {
   MONITOR_DETAIL_METRICS,
   formatPower,
@@ -339,7 +340,7 @@ export function ResourcesTab() {
   // always fetch once: the switch is persisted now, so gating the hook on it
   // would leave a session that opens with it off reading zeros forever.
   const systemInfo = useSystemInfo({
-    pollMs: liveUpdates ? POLL_MS : undefined,
+    pollMs: !PERSONAL_VULKAN && liveUpdates ? POLL_MS : undefined,
   });
   const storageSectionRef = useRef<HTMLElement | null>(null);
   const modelMemoryRef = useRef<HTMLElement | null>(null);
@@ -740,7 +741,7 @@ export function ResourcesTab() {
         </div>
         {/* Top edge on the h1's cap top (text-xl at leading 1.4; Hellix: 0.322em). */}
         <div className="mt-[calc(var(--text-xl)*0.322)] flex min-w-0 flex-wrap items-center gap-2">
-          <label className="flex h-9 shrink-0 items-center gap-4 rounded-full border border-border/60 px-3.5 text-xs font-medium text-foreground">
+          {!PERSONAL_VULKAN && <label className="flex h-9 shrink-0 items-center gap-4 rounded-full border border-border/60 px-3.5 text-xs font-medium text-foreground">
             <span>{t("settings.resources.liveUpdates")}</span>
             <Switch
               className="scale-[0.88]"
@@ -748,11 +749,11 @@ export function ResourcesTab() {
               checked={liveUpdates}
               onCheckedChange={setLiveUpdates}
             />
-          </label>
+          </label>}
         </div>
       </header>
 
-      <SettingsSection title={t("settings.resources.liveMonitor.title")}>
+      {!PERSONAL_VULKAN && <SettingsSection title={t("settings.resources.liveMonitor.title")}>
         <div className="grid gap-3 py-3 sm:grid-cols-2 sm:[&>:last-child:nth-child(odd)]:col-span-2">
           <MetricTile
             label={t("settings.resources.liveMonitor.cpu")}
@@ -958,9 +959,9 @@ export function ResourcesTab() {
             onCheckedChange={setShowModelBreakdown}
           />
         </SettingsRow>
-      </SettingsSection>
+      </SettingsSection>}
 
-      <SettingsSection title={t("settings.resources.gpu.title")}>
+      {!PERSONAL_VULKAN && <SettingsSection title={t("settings.resources.gpu.title")}>
         {driverWarning?.driver_version ? (
           <div className="flex items-start justify-between gap-3 border-b border-border/60 py-3">
             <p
@@ -1284,9 +1285,9 @@ export function ResourcesTab() {
             {gpuUnknown ? gpuUnknownLabel : t("settings.resources.gpu.noGpu")}
           </div>
         )}
-      </SettingsSection>
+      </SettingsSection>}
 
-      <SettingsSection title={t("settings.resources.floatingWindow")}>
+      {!PERSONAL_VULKAN && <SettingsSection title={t("settings.resources.floatingWindow")}>
         <SettingsRow
           label={t("settings.resources.showFloatingWindow")}
           description={t("settings.resources.showFloatingWindowDescription")}
@@ -1356,13 +1357,11 @@ export function ResourcesTab() {
             })}
           </div>
         )}
-      </SettingsSection>
+      </SettingsSection>}
 
       <ModelMemorySection ref={modelMemoryRef} />
 
-      <LlamaBackendSection />
-      <EngineVersionsSection />
-      <InferenceEnginesSection ref={enginesRef} />
+      {!PERSONAL_VULKAN && <><LlamaBackendSection /><EngineVersionsSection /><InferenceEnginesSection ref={enginesRef} /></>}
 
       <SettingsSection
         ref={storageSectionRef}

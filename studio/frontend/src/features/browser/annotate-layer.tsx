@@ -10,6 +10,7 @@ import { useT } from "@/i18n";
 import { DragDropVerticalIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MicIcon } from "@/lib/mic-icon";
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { Tick02Icon } from "@/lib/tick-icon";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -887,7 +888,7 @@ function CommentForm({
         >
           <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="size-4.5" />
         </button>
-      ) : (
+      ) : !PERSONAL_VULKAN ? (
         <button
           type="button"
           aria-label={micLabel}
@@ -905,7 +906,7 @@ function CommentForm({
         >
           <MicIcon className="size-4.5" />
         </button>
-      )}
+      ) : null}
     </form>
   );
 }

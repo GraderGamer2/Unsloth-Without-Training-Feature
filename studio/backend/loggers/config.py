@@ -394,6 +394,16 @@ class LogConfig:
     ) -> structlog.BoundLogger:
         """Configure structured logging; pass quiet_progress_bars=False for a process that streams
         progress."""
+        from utils.gpu_policy import personal_vulkan
+
+        if personal_vulkan():
+            logging.disable(logging.CRITICAL)
+
+            def discard_event(_logger, _method, _event):
+                raise structlog.DropEvent
+
+            structlog.configure(processors = [discard_event], cache_logger_on_first_use = False)
+            return structlog.get_logger(service_name)
         log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
         log_level = getattr(logging, log_level_name, logging.INFO)
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { ShutdownDialog } from "@/components/shutdown-dialog";
 import { Button } from "@/components/ui/button";
 import { usePlatformStore } from "@/config/env";
@@ -175,8 +176,12 @@ export function AboutTab() {
 
       <StudioVersionSection desktopAppVersion={desktopAppVersion} />
 
-      <EngineVersionsSection />
-      <InferenceEnginesSection />
+      {!PERSONAL_VULKAN && (
+        <>
+          <EngineVersionsSection />
+          <InferenceEnginesSection />
+        </>
+      )}
 
       <StandaloneEnvironmentSection />
 
@@ -237,18 +242,20 @@ export function AboutTab() {
             {t("onboarding.settingsOpen")}
           </button>
         </SettingsRow>
-        <SettingsRow label={t("settings.about.documentation")}>
-          <a
-            href="https://unsloth.ai/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-          >
-            <HugeiconsIcon icon={Book03Icon} className="size-3.5" />
-            unsloth.ai/docs
-            <HugeiconsIcon icon={ArrowUpRight01Icon} className="size-3" />
-          </a>
-        </SettingsRow>
+        {!PERSONAL_VULKAN && (
+          <SettingsRow label={t("settings.about.documentation")}>
+            <a
+              href="https://unsloth.ai/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              <HugeiconsIcon icon={Book03Icon} className="size-3.5" />
+              unsloth.ai/docs
+              <HugeiconsIcon icon={ArrowUpRight01Icon} className="size-3" />
+            </a>
+          </SettingsRow>
+        )}
         <SettingsRow label={t("settings.about.releaseNotes")}>
           <a
             href="https://unsloth.ai/docs/new/changelog"

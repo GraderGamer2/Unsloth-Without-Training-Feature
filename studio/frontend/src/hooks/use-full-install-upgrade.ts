@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { usePlatformStore } from "@/config/env";
 import {
   type TauriRepairController,
@@ -16,7 +17,7 @@ export function useFullInstallUpgrade(): TauriRepairController | null {
   const verdictMeasured = usePlatformStore(
     (s) => s.isChatOnly() && !s.capabilitiesUnknown(),
   );
-  return canUpgradeToFullInstall(chatOnlyReason, chatOnlyHint, verdictMeasured, repair)
+  return !PERSONAL_VULKAN && canUpgradeToFullInstall(chatOnlyReason, chatOnlyHint, verdictMeasured, repair)
     ? repair
     : null;
 }
@@ -31,7 +32,7 @@ export function useFullInstallBringsVideo(): TauriRepairController | null {
   const verdictMeasured = usePlatformStore(
     (s) => s.isChatOnly() && !s.capabilitiesUnknown(),
   );
-  return canUpgradeForVideo(chatOnlyReason, chatOnlyHint, verdictMeasured, repair, {
+  return !PERSONAL_VULKAN && canUpgradeForVideo(chatOnlyReason, chatOnlyHint, verdictMeasured, repair, {
     deviceType,
     cpuTraining,
   })

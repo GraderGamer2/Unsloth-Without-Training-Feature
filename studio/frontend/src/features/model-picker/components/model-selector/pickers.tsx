@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { ChevronDownStandardIcon, ChevronRightStandardIcon } from "@/lib/chevron-icons";
 import {
   isChatGgufTask,
@@ -4609,8 +4610,8 @@ export function HubModelPicker({
   const [chosenFormatFilter, setFormatFilter] = useState<FormatFilter>("all");
   const npuCatalog = useNpuCatalog(npu);
   // MLX only runs on a Mac; chat keeps it everywhere.
-  const offeredFormatFilters = useMemo(
-    () => formatFilterValues({ npu: !!npuCatalog, mlx: isMac || !task }),
+  const offeredFormatFilters = useMemo<readonly FormatFilter[]>(
+    () => PERSONAL_VULKAN ? ["gguf"] : formatFilterValues({ npu: !!npuCatalog, mlx: isMac || !task }),
     [npuCatalog, isMac, task],
   );
   const formatFilterOptions = useMemo(
@@ -4620,7 +4621,7 @@ export function HubModelPicker({
       ),
     [offeredFormatFilters],
   );
-  const formatFilter = coerceFormatFilter(
+  const formatFilter = PERSONAL_VULKAN ? "gguf" : coerceFormatFilter(
     chosenFormatFilter,
     offeredFormatFilters,
   );

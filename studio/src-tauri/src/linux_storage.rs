@@ -16,6 +16,67 @@ pub(crate) const FIXED_STORAGE_ENV: &str = "UNSLOTH_LINUX_DESKTOP_STORAGE";
 static HOST_ENV: OnceLock<Vec<(&'static str, Option<OsString>)>> = OnceLock::new();
 static BACKEND_WHEEL: OnceLock<PathBuf> = OnceLock::new();
 
+const PERSONAL_ENV: &[&str] = &[
+    "UNSLOTH_PERSONAL_VULKAN",
+    "UNSLOTH_NO_TORCH",
+    "HF_HUB_DISABLE_TELEMETRY",
+    "UNSLOTH_STUDIO_DISABLE_API_MONITOR",
+    "UNSLOTH_DIFFUSION_ENGINE",
+    "DO_NOT_TRACK",
+    "LLAMA_SERVER_PATH",
+    "SD_CLI_PATH",
+    "SD_SERVER_PATH",
+    "WHISPER_SERVER_PATH",
+    "AUDIOCPP_SERVER_PATH",
+    "DRI_PRIME",
+];
+
+pub(crate) fn personal_vulkan() -> bool {
+    cfg!(feature = "personal-vulkan")
+}
+
+fn select_rembrandt_gpu() {
+    let Ok(cards) = fs::read_dir("/sys/class/drm") else {
+        return;
+    };
+    for card in cards.flatten() {
+        let device = card.path().join("device");
+        let has_id = |file, id| fs::read_to_string(device.join(file))
+            .is_ok_and(|value| value.trim() == id);
+        if !has_id("vendor", "0x1002") || !has_id("device", "0x1681") {
+            continue;
+        }
+        if let Some(slot) = device.canonicalize().ok()
+            .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        {
+            let slot = slot.replace([':', '.'], "_");
+            std::env::set_var("DRI_PRIME", format!("pci-{slot}!"));
+            return;
+        }
+    }
+}
+
+fn load_personal_runtimes(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    for (key, resource) in [
+        ("LLAMA_SERVER_PATH", "llama/llama-server"),
+        ("SD_CLI_PATH", "diffusion/sd-cli"),
+        ("SD_SERVER_PATH", "diffusion/sd-server"),
+        ("WHISPER_SERVER_PATH", "whisper/whisper-server"),
+        ("AUDIOCPP_SERVER_PATH", "audio/audiocpp_server"),
+    ] {
+        let path = app.path().resolve(
+            format!("personal-runtimes/{resource}"),
+            tauri::path::BaseDirectory::Resource,
+        )?;
+        let info = fs::metadata(&path)?;
+        if !info.is_file() || info.mode() & 0o111 == 0 {
+            return Err(io::Error::other(format!("Missing executable: {}", path.display())).into());
+        }
+        std::env::set_var(key, path);
+    }
+    Ok(())
+}
+
 pub(crate) fn load_bundled_backend(
     app: &tauri::AppHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -43,6 +104,9 @@ pub(crate) fn load_bundled_backend(
         .into());
     };
     let _ = BACKEND_WHEEL.set(wheel.clone());
+    if personal_vulkan() {
+        load_personal_runtimes(app)?;
+    }
     Ok(())
 }
 
@@ -256,6 +320,7 @@ pub(crate) fn configure<R: tauri::Runtime>(context: &mut tauri::Context<R>) -> i
                 "UNSLOTH_LEGACY_HF_HUB_CACHE",
             ])
             .chain(crate::linux_gpu::POLICY_ENV.iter().copied())
+            .chain(PERSONAL_ENV.iter().copied())
             .map(|name| (name, std::env::var_os(name)))
             .collect(),
     );
@@ -278,6 +343,16 @@ pub(crate) fn configure<R: tauri::Runtime>(context: &mut tauri::Context<R>) -> i
     std::env::set_var("UV_NO_MODIFY_PATH", "1");
     std::env::set_var(FIXED_STORAGE_ENV, "1");
     crate::linux_gpu::configure(&home, &studio);
+    if personal_vulkan() {
+        std::env::set_var("UNSLOTH_PERSONAL_VULKAN", "1");
+        std::env::set_var("UNSLOTH_NO_TORCH", "1");
+        std::env::set_var("UNSLOTH_LLAMA_CPP_BACKEND", "vulkan");
+        std::env::set_var("HF_HUB_DISABLE_TELEMETRY", "1");
+        std::env::set_var("UNSLOTH_STUDIO_DISABLE_API_MONITOR", "1");
+        std::env::set_var("UNSLOTH_DIFFUSION_ENGINE", "sd_cpp");
+        std::env::set_var("DO_NOT_TRACK", "1");
+        select_rembrandt_gpu();
+    }
     Ok(config)
 }
 

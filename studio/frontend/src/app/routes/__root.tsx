@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { shouldUseCustomWindowTitlebar } from "@/components/tauri/window-titlebar";
 import {
   ChatBackground,
@@ -720,7 +721,7 @@ function RootLayout() {
       {!isAuthFlowRoute && <ChatSettingsHydrationMount />}
       {!isAuthFlowRoute && <LowDiskNoticeMount />}
       {!isAuthFlowRoute && <OnboardingMount />}
-      {!isAuthFlowRoute && <ApiMonitorOverlay />}
+      {!PERSONAL_VULKAN && !isAuthFlowRoute && <ApiMonitorOverlay />}
       {hfTokenWarningDialog}
       {remoteCodeConsentDialog}
       {downloadApprovalDialog}

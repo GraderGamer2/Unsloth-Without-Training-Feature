@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
+
 export const en = {
   turns: {
     label: "Turn {number}",
@@ -2425,7 +2427,7 @@ export const en = {
       fullInstall: {
         label: "Install type",
         description:
-          "Chat only (GGUF). The full install adds training, export, video, safetensors models and additional image generation features.",
+          PERSONAL_VULKAN ? "Vulkan inference with GGUF models." : "Chat only (GGUF). The full install adds training, export, video, safetensors models and additional image generation features.",
         descriptionMlx:
           "Chat only (GGUF and MLX). The full install adds training, export, video, safetensors models and additional image generation features.",
         descriptionCpu:

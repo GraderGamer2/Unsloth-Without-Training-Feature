@@ -1910,7 +1910,9 @@ def _restrict_server_log_perms(log_dir: Path) -> None:
 
 def _setup_server_disk_logging():
     """Tees output to ~/.unsloth/studio/logs/server/ so hard crashes leave a stack; keeps newest 20; UNSLOTH_STUDIO_NO_FILE_LOG=1 opts out."""
-    if os.environ.get("UNSLOTH_STUDIO_NO_FILE_LOG") == "1":
+    from utils.gpu_policy import personal_vulkan
+
+    if personal_vulkan() or os.environ.get("UNSLOTH_STUDIO_NO_FILE_LOG") == "1":
         return None
     try:
         log_dir = _studio_root() / "logs" / "server"

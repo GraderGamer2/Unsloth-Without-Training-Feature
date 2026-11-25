@@ -313,8 +313,9 @@ fi
 max_glibc="$({ readelf --version-info "$binary" 2>/dev/null || true; } |
   grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
 [[ -n "$max_glibc" ]] || { echo "Could not determine the executable glibc floor" >&2; exit 1; }
-if [[ "$(printf '%s\n%s\n' 2.35 "$max_glibc" | sort -V | tail -1)" != "2.35" ]]; then
-  echo "Executable requires GLIBC_$max_glibc, newer than the Ubuntu 22.04 floor GLIBC_2.35" >&2
+glibc_floor=${UNSLOTH_APPIMAGE_GLIBC_FLOOR:-2.35}
+if [[ "$(printf '%s\n%s\n' "$glibc_floor" "$max_glibc" | sort -V | tail -1)" != "$glibc_floor" ]]; then
+  echo "Executable requires GLIBC_$max_glibc, newer than the build floor GLIBC_$glibc_floor" >&2
   exit 1
 fi
 

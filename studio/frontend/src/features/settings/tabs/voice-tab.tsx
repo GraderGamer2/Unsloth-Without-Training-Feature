@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -1151,7 +1152,7 @@ export function VoiceTab() {
 
   useEffect(() => stopPreview, [stopPreview]);
 
-  if (subpage === "recents") {
+  if (!PERSONAL_VULKAN && subpage === "recents") {
     return (
       <RecentDictationsView
         selectedId={selectedDictationId}
@@ -1164,7 +1165,7 @@ export function VoiceTab() {
     );
   }
 
-  if (subpage === "dictionary") {
+  if (!PERSONAL_VULKAN && subpage === "dictionary") {
     return <DictationDictionaryView onBack={() => setSubpage("main")} />;
   }
 
@@ -1179,7 +1180,7 @@ export function VoiceTab() {
         </p>
       </header>
 
-      <SettingsSection title={t("settings.voice.dictation.sectionTitle")}>
+      {!PERSONAL_VULKAN && <SettingsSection title={t("settings.voice.dictation.sectionTitle")}>
         <SettingsRow
           label={t("settings.voice.dictation.micTargetLabel")}
           description={
@@ -1713,7 +1714,7 @@ export function VoiceTab() {
             {t("settings.voice.recents.manage")}
           </Button>
         </SettingsRow>
-      </SettingsSection>
+      </SettingsSection>}
 
       <SettingsSection title={t("settings.voice.readAloud.sectionTitle")}>
         {ttsSupported ? (

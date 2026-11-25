@@ -3,7 +3,15 @@
 
 """API Routes"""
 
-from routes.training import router as training_router
+from utils.gpu_policy import personal_vulkan
+
+if personal_vulkan():
+    training_router = training_history_router = export_router = openai_fine_tuning_router = None
+else:
+    from routes.training import router as training_router
+    from routes.export import router as export_router
+    from routes.training_history import router as training_history_router
+    from routes.openai_fine_tuning import router as openai_fine_tuning_router
 from routes.models import router as models_router
 from routes.inference import router as inference_router
 from routes.inference import studio_router as inference_studio_router
@@ -12,8 +20,6 @@ from routes.video import openai_router as video_openai_router
 from routes.datasets import router as datasets_router
 from routes.auth import router as auth_router
 from routes.data_recipe import router as data_recipe_router
-from routes.export import router as export_router
-from routes.training_history import router as training_history_router
 from routes.chat_history import router as chat_history_router
 from routes.chat_export import router as chat_export_router
 from routes.external_import import router as external_import_router
@@ -27,7 +33,6 @@ from routes.rag import router as rag_router
 from routes.research_runs import router as research_runs_router
 from routes.chat_generation_runs import router as chat_generation_runs_router
 from routes.youtube import router as youtube_router
-from routes.openai_fine_tuning import router as openai_fine_tuning_router
 
 __all__ = [
     "training_router",

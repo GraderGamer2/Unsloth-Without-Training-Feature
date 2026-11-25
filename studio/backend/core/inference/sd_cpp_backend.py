@@ -117,7 +117,7 @@ from core.inference.sd_cpp_engine import (
 from core.inference.sd_cpp_server import SdCppLatentFormatError, SdCppServer
 from loggers import get_logger
 from utils.gpu_memory_events import invalidates_gpu_memory as _invalidates_gpu_memory
-from utils.gpu_policy import amd_only
+from utils.gpu_policy import amd_only, personal_vulkan
 from utils.account_context import account_thread, current_account_id
 from utils.subprocess_compat import (
     windows_hidden_subprocess_kwargs,
@@ -6321,6 +6321,8 @@ def _native_hires_status(state: Any) -> dict[str, Any]:
 
 def _install_allowed() -> bool:
     """Whether lazy binary install is permitted (UNSLOTH_DIFFUSION_SD_CPP_INSTALL)."""
+    if personal_vulkan():
+        return False
     val = os.environ.get("UNSLOTH_DIFFUSION_SD_CPP_INSTALL", "auto").strip().lower()
     return val not in ("0", "off", "false", "no")
 

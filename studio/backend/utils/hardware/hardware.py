@@ -2307,6 +2307,14 @@ def video_capability() -> dict:
 
 def _video_capability_verdict() -> dict:
     """``video_capability`` without the Developer mode opt-in: {video_supported, video_unsupported_reason, video_unsupported_message}."""
+    from utils.gpu_policy import personal_vulkan
+
+    if personal_vulkan():
+        return {
+            "video_supported": True,
+            "video_unsupported_reason": None,
+            "video_unsupported_message": None,
+        }
     if get_device() in (DeviceType.CUDA, DeviceType.XPU):
         return {
             "video_supported": True,

@@ -4368,6 +4368,18 @@ def test_h3_native_detects_an_unowned_vulkan_build_from_its_device_listing(monke
     assert "--clip-on-cpu" in state.pipe.offloaded_flags
 
 
+def test_personal_build_chooses_vulkan_without_a_torch_device(monkeypatch):
+    from utils.gpu_policy import personal_vulkan
+
+    monkeypatch.setenv("UNSLOTH_PERSONAL_VULKAN", "1")
+    if not personal_vulkan():
+        pytest.skip("Personal Vulkan is a Linux profile")
+    target = VideoBackend()._device_target()
+    assert target.device == target.backend == "vulkan"
+    assert target.vendor == "amd"
+    assert target.dtype is None
+
+
 @pytest.mark.parametrize(
     "devices",
     [

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import {
   type SegmentRecorder,
   createAudioRecorder,
@@ -75,6 +76,7 @@ async function openMicrophone(deviceId: string): Promise<MediaStream> {
 }
 
 export function recordingSupported(): boolean {
+  if (PERSONAL_VULKAN) return false;
   return (
     typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function"

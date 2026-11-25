@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
+from utils.gpu_policy import personal_vulkan
 
 from studio_mcp import prompts
 from studio_mcp.profile import AGENT, CHAT, CallerProfile
@@ -16,14 +17,12 @@ from studio_mcp.tools import (
     audio,
     cancel,
     data,
-    export,
     images,
     jobs,
     library,
     models,
     status,
     text,
-    training,
     video,
 )
 
@@ -46,6 +45,13 @@ INSTRUCTIONS = " ".join(
 )
 
 
+if personal_vulkan():
+    _training_modules = ()
+else:
+    from studio_mcp.tools import training, export
+    _training_modules = (training, export)
+
+
 TOOL_MODULES = (
     status,
     models,
@@ -55,8 +61,7 @@ TOOL_MODULES = (
     video,
     jobs,
     data,
-    training,
-    export,
+    *_training_modules,
     library,
     cancel,
 )
@@ -95,7 +100,14 @@ def surface(profile: CallerProfile) -> frozenset[str]:
 
 def create_studio_mcp(profile: CallerProfile = AGENT, exclude: frozenset = frozenset()) -> FastMCP:
     """The Unsloth MCP server as ``profile`` sees it: its tools minus ``exclude``, their text rendered for that surface."""
-    mcp = FastMCP("Unsloth Studio", instructions = INSTRUCTIONS)
+    instructions = INSTRUCTIONS
+    if personal_vulkan():
+        instructions = (
+            "Unsloth Studio runs GGUF models for chat, images and video, and can process audio files. "
+            "Call studio_status and list_models before using load_model. Generated media is saved to "
+            "the local library. Follow video jobs with get_job."
+        )
+    mcp = FastMCP("Unsloth Studio", instructions = instructions)
     mcp.add_middleware(StudioToolAccess())
     tools = surface(profile) - exclude
 
@@ -126,6 +138,8 @@ def create_studio_mcp(profile: CallerProfile = AGENT, exclude: frozenset = froze
 
     if profile.prompts:
         for prompt, title in prompts.PROMPTS:
+            if personal_vulkan() and prompt.__name__ == "build_dataset_and_train":
+                continue
             mcp.prompt(prompt, title = title)
 
     return mcp

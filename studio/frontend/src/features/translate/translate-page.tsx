@@ -94,6 +94,7 @@ import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { Settings01Icon } from "@/lib/hugeicons-derived";
 import { StopIcon } from "@/lib/media-control-icons";
 import { MicIcon } from "@/lib/mic-icon";
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { Tick02Icon } from "@/lib/tick-icon";
 import { toast } from "@/lib/toast";
 import { useScrollFades } from "@/hooks/use-scroll-fades";
@@ -1772,7 +1773,7 @@ export function TranslatePage() {
               )}
               <div className="flex shrink-0 items-center gap-1 px-2.5 pt-1.5 pb-2.5">
                 {/* Always shown: a click explains why it cannot dictate or offers local dictation. */}
-                {dictation.dictating ? (
+                {!PERSONAL_VULKAN && (dictation.dictating ? (
                   <IconAction
                     icon={dictation.finalizing ? undefined : StopIcon}
                     iconClassName={STOP_GLYPH}
@@ -1794,7 +1795,7 @@ export function TranslatePage() {
                   >
                     <MicIcon className="size-5" />
                   </IconAction>
-                )}
+                ))}
                 <IconAction
                   icon={readingFile ? undefined : Upload01Icon}
                   iconClassName="size-5"

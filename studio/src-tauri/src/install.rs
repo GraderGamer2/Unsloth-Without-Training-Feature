@@ -957,7 +957,12 @@ fn installer_env(env: InstallerEnv) -> Vec<(&'static str, &'static str)> {
         vars.push(("UNSLOTH_SKIP_LONG_PATHS", "1"));
     }
     // Always set, so an UNSLOTH_NO_TORCH inherited by the app cannot override the choice.
-    vars.push(("UNSLOTH_NO_TORCH", if env.no_torch { "1" } else { "0" }));
+    let mut no_torch = env.no_torch;
+    #[cfg(target_os = "linux")]
+    {
+        no_torch |= crate::linux_storage::personal_vulkan();
+    }
+    vars.push(("UNSLOTH_NO_TORCH", if no_torch { "1" } else { "0" }));
     vars
 }
 

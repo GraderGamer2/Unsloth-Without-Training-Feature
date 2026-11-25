@@ -100,6 +100,8 @@ struct DesktopCapability {
     supports_fixed_desktop_storage: Option<bool>,
     #[cfg(target_os = "linux")]
     supports_amd_desktop: Option<bool>,
+    #[cfg(target_os = "linux")]
+    supports_personal_vulkan: Option<bool>,
     desktop_auth_stale_reason: Option<String>,
     // A partial install answers `-h` but its backend dies on import, so a running CLI is not ready.
     studio_install_ok: Option<bool>,
@@ -1043,6 +1045,10 @@ fn managed_capability_stale_reason(bin: &Path, capability: &DesktopCapability) -
     {
         return Some("desktop_storage_backend_required".to_string());
     }
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::personal_vulkan() && capability.supports_personal_vulkan != Some(true) {
+        return Some("desktop_storage_backend_required".to_string());
+    }
     let reason = desktop_capability_stale_reason(capability)?;
     let version = capability.version.as_deref();
     if reason == "desktop_backend_version_outdated"
@@ -1459,6 +1465,8 @@ mod tests {
             supports_fixed_desktop_storage: Some(true),
             #[cfg(target_os = "linux")]
             supports_amd_desktop: Some(true),
+            #[cfg(target_os = "linux")]
+            supports_personal_vulkan: Some(true),
             desktop_auth_stale_reason: None,
             studio_install_ok: Some(true),
             studio_install_reason: None,

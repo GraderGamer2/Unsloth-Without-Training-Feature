@@ -32,7 +32,7 @@ import struct
 from core.inference.inference_gate import holds_inference
 from core.inference.http_stream import SSE_LINE_END
 from loggers import get_logger
-from utils.gpu_policy import amd_only
+from utils.gpu_policy import amd_only, personal_vulkan
 from utils.gpu_memory_events import invalidate_gpu_memory as _invalidate_gpu_memory
 from utils import host_memory as _host_memory
 from utils.gpu_memory_events import invalidates_gpu_memory as _invalidates_gpu_memory
@@ -25593,22 +25593,15 @@ class LlamaCppBackend:
                 out[ki] = "<redacted>"
         return out
 
-    def _start_llama_process(
-        self, cmd: list[str], env: dict, *, child_gpu_physical_ids: Optional[tuple[int, ...]]
-    ) -> bool:
-        """Returns False without spawning once teardown has begun, so callers stop instead of
-        health-waiting."""
-        # Drop an orphan Popen a concurrent load may have stored past Phase 1.
-        self._kill_process()
-        self._child_gpu_physical_ids = child_gpu_physical_ids
-
-        self._stdout_lines = []
-        # Tees llama-server output to a log file for post-mortems; the parent keeps only the last 50 lines.
+    def _open_llama_attempt_log(self, filename: str) -> None:
         self._llama_log_fh = None
+        self._llama_log_path = None
+        if personal_vulkan():
+            return
         try:
             log_dir = studio_root() / "logs" / "llama-server"
             log_dir.mkdir(parents = True, exist_ok = True)
-            self._llama_log_path = log_dir / f"llama-{int(time.time())}-port-{self._port}.log"
+            self._llama_log_path = log_dir / filename
             self._llama_log_fh = open(
                 self._llama_log_path,
                 "w",
@@ -25622,6 +25615,18 @@ class LlamaCppBackend:
             # Best-effort; never block the load on logging.
             logger.warning(f"Could not open llama-server log file: {e}")
             self._llama_log_path = None
+
+    def _start_llama_process(
+        self, cmd: list[str], env: dict, *, child_gpu_physical_ids: Optional[tuple[int, ...]]
+    ) -> bool:
+        """Returns False without spawning once teardown has begun, so callers stop instead of
+        health-waiting."""
+        # Drop an orphan Popen a concurrent load may have stored past Phase 1.
+        self._kill_process()
+        self._child_gpu_physical_ids = child_gpu_physical_ids
+
+        self._stdout_lines = []
+        self._open_llama_attempt_log(f"llama-{int(time.time())}-port-{self._port}.log")
 
         # Log the argv per attempt (the text-only mmproj retry re-enters here
         # with --mmproj stripped), redacting the API key.
@@ -33772,36 +33777,11 @@ class LlamaCppBackend:
                         self._child_gpu_physical_ids = _child_gpu_physical_ids
 
                         self._stdout_lines = []
-                        # Tee llama-server output to a dedicated log file so a
-                        # post-mortem has the full trail even when the parent only
-                        # kept the last 50 lines. Path is under the studio home.
-                        # ``label`` (MTP fallback) and the attempt index (--fit
-                        # off retry) keep a respawn within the same epoch second
-                        # from truncating the crash log a retry warning just
-                        # pointed the user at.
-                        self._llama_log_fh = None
-                        try:
-                            log_dir = studio_root() / "logs" / "llama-server"
-                            log_dir.mkdir(parents = True, exist_ok = True)
-                            self._llama_log_path = log_dir / (
-                                f"llama-{int(time.time())}{label}-port-{self._port}"
-                                f"-try{_spawn_attempt}.log"
-                            )
-                            self._llama_log_fh = open(
-                                self._llama_log_path,
-                                "w",
-                                encoding = "utf-8",
-                                buffering = 1,
-                            )
-                            # After the open, so the cap counts this file and never deletes
-                            # it. On the retry path the earlier attempts' logs are what a
-                            # reader wants, and keep-newest holds on to them.
-                            prune_log_dir(log_dir, "llama-*.log", protect = self._llama_log_path)
-                            logger.info(f"llama-server stdout/stderr -> {self._llama_log_path}")
-                        except (OSError, UnicodeDecodeError) as e:
-                            # Best-effort; never block the load on logging.
-                            logger.warning(f"Could not open llama-server log file: {e}")
-                            self._llama_log_path = None
+                        # Keep retries in the same second from truncating the prior attempt's log.
+                        self._open_llama_attempt_log(
+                            f"llama-{int(time.time())}{label}-port-{self._port}"
+                            f"-try{_spawn_attempt}.log"
+                        )
                         # Every launch: a retry can turn the fitter on or re-mask onto several
                         # cards.
                         _spawn_devices = _extra_args_main_device(run_cmd) or env.get(

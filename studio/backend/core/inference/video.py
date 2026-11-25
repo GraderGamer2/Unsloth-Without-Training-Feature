@@ -6779,6 +6779,18 @@ class VideoBackend:
     def _device_target(self, ordinal: Optional[int] = None) -> DiffusionDeviceTarget:
         """Pins the device per worker thread: torch.cuda.set_device is thread-local, not set once at
         load."""
+        from utils.gpu_policy import personal_vulkan
+
+        if personal_vulkan():
+            return DiffusionDeviceTarget(
+                device = "vulkan",
+                dtype = None,
+                backend = "vulkan",
+                vendor = "amd",
+                supports_model_cpu_offload = False,
+                supports_default_torch_compile = False,
+                supports_pinned_transfer = False,
+            )
         if ordinal is None:
             return resolve_diffusion_device_target()
         target = resolve_diffusion_device_target(ordinal = ordinal)
@@ -6960,7 +6972,10 @@ class VideoBackend:
                     f"Local pipeline path is not a diffusers directory (no valid {index}): {repo_id}"
                 )
         from .video_minimax_h3 import is_h3_native, validate_h3_transformer_filename
+        from utils.gpu_policy import personal_vulkan
 
+        if personal_vulkan() and not is_h3_native(fam, kind):
+            raise ValueError("This Vulkan build supports MiniMax-H3 GGUF video models.")
         if is_h3_native(fam, kind):
             validate_h3_transformer_filename(gguf_filename or "")
             # The GGUF filename and explicit task must name the same partition.
@@ -9734,9 +9749,12 @@ class VideoBackend:
                 raise ValueError(lora_refusal)
             transformer_quant = video_lora.dense_transformer_quant(fam, transformer_quant, loras)
         from .video_minimax_h3 import is_h3_native
+        from utils.gpu_policy import personal_vulkan
 
         if is_h3_native(fam, kind):
             return self._h3_native_download_plan(repo_id, gguf_filename or "", hf_token = hf_token)
+        if personal_vulkan():
+            raise ValueError("This Vulkan build supports MiniMax-H3 GGUF video models.")
         base = repo_id if kind == "pipeline" else resolve_video_base_repo(fam, base_repo, repo_id)
         h3_task = _h3_single_file_task(fam, kind, gguf_filename, h3_task)
         # A dev LTX-2.5 load is single stage and never opens the latent upsampler.

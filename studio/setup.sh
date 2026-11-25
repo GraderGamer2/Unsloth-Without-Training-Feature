@@ -4561,7 +4561,16 @@ PY
 }
 
 _LOCAL_LLAMA_CPP_LINKED=false
-if [ -n "${UNSLOTH_LOCAL_LLAMA_CPP_DIR:-}" ]; then
+if [ "${UNSLOTH_PERSONAL_VULKAN:-0}" = 1 ]; then
+    if [ ! -x "${LLAMA_SERVER_PATH:-}" ]; then
+        setup_fail 1 "The Ryzen Vulkan build is missing its bundled llama-server."
+    fi
+    LLAMA_CPP_DIR="$(dirname -- "$LLAMA_SERVER_PATH")"
+    LLAMA_SERVER_BIN="$LLAMA_SERVER_PATH"
+    _LOCAL_LLAMA_CPP_LINKED=true
+    _NEED_LLAMA_SOURCE_BUILD=false
+    _SKIP_PREBUILT_INSTALL=true
+elif [ -n "${UNSLOTH_LOCAL_LLAMA_CPP_DIR:-}" ]; then
     if [ ! -d "$UNSLOTH_LOCAL_LLAMA_CPP_DIR" ]; then
         _report_denied_ancestor "$UNSLOTH_LOCAL_LLAMA_CPP_DIR" "UNSLOTH_LOCAL_LLAMA_CPP_DIR"
         step "llama.cpp" "UNSLOTH_LOCAL_LLAMA_CPP_DIR does not exist: $UNSLOTH_LOCAL_LLAMA_CPP_DIR" "$C_ERR"
@@ -5390,7 +5399,7 @@ if [ "$_LLAMA_CPP_DEGRADED" = true ] \
     fi
 fi
 
-if [ ! -L "$LLAMA_CPP_DIR" ] && {
+if [ "${UNSLOTH_PERSONAL_VULKAN:-0}" != 1 ] && [ ! -L "$LLAMA_CPP_DIR" ] && {
     [ "$_RUNTIME_ROOT_IS_CUSTOM" != true ] ||
         [ -f "$LLAMA_CPP_DIR/$_STUDIO_OWNED_MARKER" ] ||
         _studio_owned_adoptable "$LLAMA_CPP_DIR"

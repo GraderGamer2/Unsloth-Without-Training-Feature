@@ -17687,6 +17687,10 @@ def _guard_chat_load_against_training(
     n_parallel: int = 1,
 ) -> Optional[dict[str, Any]]:
     """Guards automatic chat loads against training; manual GGUF placement is not estimated, but diffusion and unclassified GGUFs are."""
+    from utils.gpu_policy import personal_vulkan
+
+    if personal_vulkan():
+        return None
     from core.training import get_training_backend
     from routes.training_vram import can_load_chat_during_training
 
@@ -19085,6 +19089,12 @@ async def load_model_gated(
     return mid-load and hide a late failure in an unread body. This blocks until the
     model is resident and raises the real exception.
     """
+    from utils.gpu_policy import personal_vulkan
+
+    if personal_vulkan() and (
+        request.engine != "auto" or request.model_path.lower().endswith(".safetensors")
+    ):
+        raise HTTPException(status_code = 400, detail = "Select a GGUF model for this Vulkan build.")
     if is_decision_api_model(request.model_path):
         raise HTTPException(
             status_code = 400,
@@ -20613,6 +20623,9 @@ async def _load_model_impl(
                 status_code = 400,
                 detail = f"Invalid model identifier: {model_log_label}",
             )
+        from utils.gpu_policy import personal_vulkan
+        if personal_vulkan() and not config.is_gguf:
+            raise HTTPException(status_code = 400, detail = "Select a GGUF model for this Vulkan build.")
         await asyncio.to_thread(_require_resolved_base_access, config)
 
         # Resolve inherited extras once before command-dependent preflights.

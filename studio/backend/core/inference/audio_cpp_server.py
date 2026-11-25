@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
@@ -27,7 +28,7 @@ from core.inference.audio_cpp_models import AudioCppModel
 from core.inference.audio_cpp_failures import classify_audio_cpp_failure
 from core.inference.audio_errors import sanitize_runtime_tail
 from loggers import get_logger
-from utils.gpu_policy import amd_only
+from utils.gpu_policy import amd_only, personal_vulkan
 from utils.prebuilt.child_env import isolate_home, scrub_env
 from utils.prebuilt.runtime_libs import dedupe_existing_dirs
 from utils.process_lifetime import (
@@ -305,6 +306,8 @@ def select_backend(binary: str, force_cpu: bool) -> str:
     """The ``--backend`` for this launch: CPU when asked, else what the install was built for."""
     if force_cpu:
         return "cpu"
+    if personal_vulkan():
+        return "vulkan"
     override = (os.environ.get("UNSLOTH_AUDIO_CPP_BACKEND") or "").strip().lower()
     if override and (not amd_only() or override in ("cpu", "vulkan", "hip")):
         return override
@@ -482,6 +485,13 @@ class AudioCppServer:
         self.model_id = model_id
         self.backend = backend
         self._config_dir = config_dir
+        self._output_tail = b""
+        self._output_reader: Optional[threading.Thread] = None
+        if personal_vulkan() and process.stdout is not None:
+            self._output_reader = threading.Thread(
+                target = self._read_output_tail, args = (process.stdout,), daemon = True
+            )
+            self._output_reader.start()
 
     @classmethod
     def start(
@@ -581,7 +591,8 @@ class AudioCppServer:
         # Released as late as possible: the server binds the port moments after this close.
         reservation.close()
         try:
-            with open(log_path, "wb") as log:
+            output = nullcontext(subprocess.PIPE) if personal_vulkan() else open(log_path, "wb")
+            with output as log:
                 process = subprocess.Popen(
                     command,
                     stdout = log,
@@ -619,11 +630,21 @@ class AudioCppServer:
             raise
         return server
 
+    def _read_output_tail(self, stream: BinaryIO) -> None:
+        with stream:
+            while chunk := stream.read1(4096):
+                self._output_tail = (self._output_tail + chunk)[-4096:]
+
     def log_tail(self, limit: int = 2000) -> str:
-        try:
-            data = (self._config_dir / "server.log").read_bytes()
-        except OSError:
-            return ""
+        if self._output_reader is not None:
+            if not self.alive():
+                self._output_reader.join(timeout = 0.2)
+            data = self._output_tail
+        else:
+            try:
+                data = (self._config_dir / "server.log").read_bytes()
+            except OSError:
+                return ""
         tail = data[-limit:]
         if len(data) > limit:
             # The cut can split a path or token; drop that partial first line (or word, or all of it).

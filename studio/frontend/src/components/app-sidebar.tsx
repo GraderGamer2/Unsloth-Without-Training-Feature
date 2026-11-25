@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { BrushCleaningIcon } from "@/lib/brush-cleaning-icon";
 import { ChevronDownStandardIcon } from "@/lib/chevron-icons";
 import {
@@ -1626,10 +1627,10 @@ export function AppSidebar() {
     hasMore: runsHaveMore,
     loadMore: loadMoreRuns,
   } = useTrainingHistorySidebarItems(
-    !trainUnavailable && trainingRecentsRoute,
+    !PERSONAL_VULKAN && !trainUnavailable && trainingRecentsRoute,
   );
   const showTrainingRecents =
-    !trainUnavailable && trainingRecentsRoute && runItems.length > 0;
+    !PERSONAL_VULKAN && !trainUnavailable && trainingRecentsRoute && runItems.length > 0;
   const { displayTitle, avatarDataUrl } = useEffectiveProfile();
 
   const { projects, hasLoaded: projectsLoaded } = useChatProjects();
@@ -3549,7 +3550,9 @@ export function AppSidebar() {
     sidebarNavRowPinned(item, sidebarNavAuto, { projectsSectionShowing });
   // audio and images are temporarily pinned while active without saving the preference.
   const { inline: inlineNavIds, overflow: overflowNavIds } = placeNavRows(
-    sidebarNav.map((item) => ({ id: item.id, pinned: navRowPinned(item) })),
+    sidebarNav
+      .filter(({ id }) => !PERSONAL_VULKAN || (id !== "train" && id !== "export"))
+      .map((item) => ({ id: item.id, pinned: navRowPinned(item) })),
     navRows.audio.active ? "audio" : navRows.images.active ? "images" : null,
   );
   const sidebarRowsLabelled = isMobile || sidebarState !== "collapsed";

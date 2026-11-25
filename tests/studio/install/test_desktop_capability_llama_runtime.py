@@ -42,6 +42,7 @@ NEW_KEYS = (
     "llama_runtime_reason",
     "supports_fixed_desktop_storage",
     "supports_amd_desktop",
+    "supports_personal_vulkan",
 )
 
 # Bumping either tells older desktops the protocol changed; additive keys must not.

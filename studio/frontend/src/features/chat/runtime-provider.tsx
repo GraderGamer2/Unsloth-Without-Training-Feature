@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { PERSONAL_VULKAN } from "@/config/personal-build";
 import { readGenerationProgress } from "./lib/generation-progress";
 import { NewChatNonceContext } from "./query-draft";
 import { useAppShellReadySignal } from "@/components/app-readiness";
@@ -3156,7 +3157,7 @@ function useStudioRuntimeAdapters(
   );
 
   // Always registered: the engine is resolved at listen() time.
-  const dictation = useMemo(() => new StudioDictationAdapter(), []);
+  const dictation = useMemo(() => PERSONAL_VULKAN ? undefined : new StudioDictationAdapter(), []);
   const speech = useMemo(
     () =>
       StudioSpeechSynthesisAdapter.isSupported()

@@ -557,6 +557,20 @@ def test_a_diffusers_pick_needs_the_pipeline_class(monkeypatch):
     r.refuse_engine_pick(detect_family("z-image"), engine = None, model_kind = "gguf")
 
 
+def test_personal_build_keeps_gguf_images_on_the_bundled_vulkan_engine(monkeypatch):
+    monkeypatch.setenv("UNSLOTH_PERSONAL_VULKAN", "1")
+    if not r.personal_vulkan():
+        pytest.skip("Personal Vulkan is a Linux profile")
+    fam = detect_family("z-image")
+    assert r.image_install_accelerator("cpu") == "vulkan"
+    assert not r._install_allowed()
+    r.refuse_engine_pick(fam, engine = "auto", model_kind = "gguf")
+    with pytest.raises(ValueError, match = "Select a GGUF image model"):
+        r.refuse_engine_pick(fam, engine = "auto", model_kind = "single_file")
+    with pytest.raises(ValueError, match = "Select a GGUF image model"):
+        r.refuse_engine_pick(fam, engine = "diffusers", model_kind = "gguf")
+
+
 def test_an_unknown_engine_pick_is_refused():
     with pytest.raises(ValueError, match = "engine must be one of auto, diffusers, sd_cpp"):
         r.refuse_engine_pick(detect_family("z-image"), engine = "vulkan", model_kind = "gguf")

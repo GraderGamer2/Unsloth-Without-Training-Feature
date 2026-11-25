@@ -48,7 +48,9 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _api_monitor_disabled() -> bool:
-    return os.environ.get(_DISABLE_ENV, "").strip().lower() in _TRUE_VALUES
+    from utils.gpu_policy import personal_vulkan
+
+    return personal_vulkan() or os.environ.get(_DISABLE_ENV, "").strip().lower() in _TRUE_VALUES
 
 
 def _token_count_or_none(value: Any) -> Optional[int]:

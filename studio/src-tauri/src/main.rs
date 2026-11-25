@@ -953,6 +953,9 @@ fn tauri_log_dir() -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 fn tauri_log_path() -> Option<PathBuf> {
+    if linux_storage::personal_vulkan() {
+        return None;
+    }
     tauri_log_dir().map(|dir| dir.join("tauri.log"))
 }
 
@@ -968,6 +971,10 @@ fn append_supervisor_log(path: Option<&Path>, line: &str) {
 }
 
 fn setup_logging() {
+    #[cfg(target_os = "linux")]
+    if linux_storage::personal_vulkan() {
+        return;
+    }
     let mut loggers: Vec<Box<dyn SharedLogger>> = vec![];
 
     loggers.push(TermLogger::new(
