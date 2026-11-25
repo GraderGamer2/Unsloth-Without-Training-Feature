@@ -37,7 +37,12 @@ PRE_PR_KEYS: dict[str, type | tuple[type, ...]] = {
     "studio_install_reason": str,
     "version": str,
 }
-NEW_KEYS = ("llama_runtime_ok", "llama_runtime_reason")
+NEW_KEYS = (
+    "llama_runtime_ok",
+    "llama_runtime_reason",
+    "supports_fixed_desktop_storage",
+    "supports_amd_desktop",
+)
 
 # Bumping either tells older desktops the protocol changed; additive keys must not.
 EXPECTED_PROTOCOL_VERSION = 1
@@ -82,6 +87,7 @@ def _capabilities(
     """Runs the installed CLI outside the checkout, with Studio and llama.cpp paths pointed at fixtures."""
     env = dict(os.environ)
     env["UNSLOTH_LLAMA_CPP_PATH"] = str(install_dir)
+    env["UNSLOTH_STUDIO_MANAGED_LLAMA_CPP_PATH"] = "1"
     env["UNSLOTH_STUDIO_HOME"] = str(tmp_path / "studio_home")
     # cwd matters: from the checkout `studio` would resolve to the source tree, not site-packages.
     args = [str(_console_script()), "studio", "desktop-capabilities"]
@@ -110,7 +116,7 @@ def _shared_health_groups() -> list[list[str]]:
                 tuple(group)
                 for group in ILP.runtime_payload_health_groups(
                     kind,
-                    source_label = None,
+                    source_label = "published",
                     runtime_name = None,
                     tag = "b10830",
                 )
@@ -128,14 +134,17 @@ def _complete_tree(root: Path) -> Path:
     runtime_dir = ILP.install_runtime_dir(root, host)
     runtime_dir.mkdir(parents = True, exist_ok = True)
     (root / "UNSLOTH_PREBUILT_INFO.json").write_text(
-        json.dumps({"release_tag": "b10830-mix-d5c17a0", "tag": "b10830"}) + "\n",
+        json.dumps({"release_tag": "b10830-mix-d5c17a0", "tag": "b10830", "source": "published"}) + "\n",
         encoding = "utf-8",
     )
     for group in _shared_health_groups():
         (runtime_dir / group[0].replace("*", "")).write_text("x", encoding = "utf-8")
     ext = ".exe" if host.is_windows else ""
     for name in ("server", "quantize"):
-        (runtime_dir / f"llama-{name}{ext}").write_text("x", encoding = "utf-8")
+        binary = runtime_dir / f"llama-{name}{ext}"
+        binary.write_text("x", encoding = "utf-8")
+        if not host.is_windows:
+            binary.chmod(0o755)
     return runtime_dir
 
 
@@ -331,11 +340,11 @@ def test_an_unimportable_probe_leaves_the_verdict_null(tmp_path):
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["llama_runtime_ok"] is None
-    assert payload["llama_runtime_reason"] == ""
+    assert payload["llama_runtime_reason"] == "llama_runtime_probe_failed"
     _assert_pre_pr_payload_intact(payload)
 
 
-def test_the_command_emits_exactly_the_pre_pr_keys_plus_the_two_new_ones():
+def test_the_command_emits_exactly_the_original_and_additive_capabilities():
     """Read off the source so it holds without the venv: a key added without a matching Option<T> in
     managed.rs is invisible to the desktop, and a removed key breaks it."""
     source = (PACKAGE_ROOT / "unsloth_cli" / "commands" / "studio.py").read_text(encoding = "utf-8")
@@ -348,8 +357,7 @@ def test_the_command_emits_exactly_the_pre_pr_keys_plus_the_two_new_ones():
 
 @NEEDS_VENV
 def test_dropping_the_new_keys_yields_the_pre_pr_payload(tmp_path):
-    """Additive, proven by subtraction: without the two new keys the payload is what the pre-PR
-    desktop accepts; neither version constant may move or the CLI reads as stale."""
+    """Removing the additive keys leaves the original payload and protocol versions."""
     root = tmp_path / "llama.cpp"
     _complete_tree(root)
     rc, out = _capabilities(root, tmp_path)
@@ -361,8 +369,7 @@ def test_dropping_the_new_keys_yields_the_pre_pr_payload(tmp_path):
 
 
 def test_the_desktop_reads_every_emitted_key_as_optional():
-    """A desktop must survive a pre-PR CLI sending neither new key: serde maps an absent field to
-    None and managed.rs only flags Some(false), so every field must stay an Option."""
+    """Every field stays optional so serde can parse capability payloads from older CLIs."""
     source = MANAGED_RS.read_text(encoding = "utf-8")
     struct_body = source.split("struct DesktopCapability {", 1)[1].split("\n}", 1)[0]
     fields = dict(re.findall(r"^\s+([a-z_]+):\s*(.+),$", struct_body, flags = re.MULTILINE))
