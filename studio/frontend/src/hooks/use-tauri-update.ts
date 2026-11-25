@@ -2,7 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useEffect, useRef, useState } from "react";
-import { isTauri } from "@/lib/api-base";
+import { isLinuxDesktop, isTauri } from "@/lib/api-base";
 import {
   copySupportDiagnostics,
   type CopySupportDiagnosticsResult,
@@ -317,7 +317,7 @@ export function useTauriUpdate(externalServerPort: number | null = null) {
   const scheduledCheckRef = useRef(checkForUpdateWhenSafe);
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || isLinuxDesktop) return;
 
     const startupTimer = setTimeout(() => {
       if (checkedRef.current) return;

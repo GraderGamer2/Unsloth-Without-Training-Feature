@@ -167,6 +167,10 @@ pub(crate) fn backend_version_stale_reason(version: Option<&str>) -> Option<Stri
 
 // Stamped by the release workflow; unset in local and CI builds, which use the floor alone.
 pub(crate) fn expected_backend_version() -> &'static str {
+    #[cfg(target_os = "linux")]
+    if let Some(version) = crate::linux_storage::bundled_backend_version() {
+        return version;
+    }
     option_env!("UNSLOTH_DESKTOP_BACKEND_VERSION").unwrap_or(MIN_DESKTOP_BACKEND_VERSION)
 }
 

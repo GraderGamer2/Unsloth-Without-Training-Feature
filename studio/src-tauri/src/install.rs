@@ -644,7 +644,10 @@ fn spawn_script(
         .stderr(Stdio::piped());
 
     #[cfg(target_os = "linux")]
-    crate::process::scrub_appimage_python_env(&mut cmd);
+    {
+        crate::process::scrub_appimage_python_env(&mut cmd);
+        crate::linux_storage::set_bundled_backend_environment(&mut cmd);
+    }
 
     // install.sh and install.ps1 reject inherited custom roots under --tauri, so scrub them and
     // pass only the chosen root with its flag; this hand-applied spawn sits outside

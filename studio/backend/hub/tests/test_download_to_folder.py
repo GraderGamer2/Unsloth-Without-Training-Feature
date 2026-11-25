@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
+from hub.schemas.downloads import DownloadModelRequest
 from hub.services.models import downloads
 from hub.services.models import local_inventory
 from utils import hf_cache_settings
@@ -144,16 +144,7 @@ def _start(monkeypatch, body):
 
 
 def _body(**over):
-    body = {
-        "repo_id": "Org/Model",
-        "gguf_variant": None,
-        "use_xet": False,
-        "scope_id": None,
-        "files": None,
-        "download_dir": None,
-    }
-    body.update(over)
-    return SimpleNamespace(**body)
+    return DownloadModelRequest(**{"repo_id": "Org/Model", "use_xet": False, **over})
 
 
 def test_download_without_download_dir_keeps_the_models_folder(settings_store, monkeypatch):

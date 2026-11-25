@@ -629,6 +629,11 @@ _tauri_gpu_branch() {
 PYTHON_VERSION=""
 
 _resolve_studio_destinations() {
+    if [ "$TAURI_MODE" = true ] && [ "${UNSLOTH_LINUX_DESKTOP_STORAGE:-}" = 1 ]; then
+        # Keep the existing desktop venv and account data, with no CLI shims in ~/.local/bin.
+        export UNSLOTH_STUDIO_HOME="$HOME/.unsloth/studio"
+        _WITH_LLAMA_CPP_DIR=""
+    fi
     _override_var=""
     _override=$(printf '%s' "${UNSLOTH_STUDIO_HOME:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     if [ -n "$_override" ]; then
@@ -7736,7 +7741,14 @@ for _p in ('torch', 'torchvision', 'torchaudio'):
 }
 
 _unsloth_desktop_install_spec=""
-if [ -n "${UNSLOTH_DESKTOP_BACKEND_VERSION:-}" ]; then
+if [ "$TAURI_MODE" = true ] && [ "${UNSLOTH_LINUX_DESKTOP_STORAGE:-}" = 1 ] \
+   && [ -n "${UNSLOTH_DESKTOP_BACKEND_WHEEL:-}" ]; then
+    if [ ! -f "$UNSLOTH_DESKTOP_BACKEND_WHEEL" ]; then
+        tauri_log "ERROR" "Bundled Unsloth backend wheel is missing."
+        exit 1
+    fi
+    _unsloth_desktop_install_spec="$UNSLOTH_DESKTOP_BACKEND_WHEEL"
+elif [ -n "${UNSLOTH_DESKTOP_BACKEND_VERSION:-}" ]; then
     _unsloth_desktop_install_spec="unsloth>=${UNSLOTH_DESKTOP_BACKEND_VERSION}"
 fi
 _unsloth_release_install_spec="${_unsloth_desktop_install_spec:-unsloth>=2026.11.11}"
@@ -7836,6 +7848,8 @@ UNSLOTH_PAIR_PY
 
 _relax_unsloth_floors_to_index() {
     rm -f "$_UNSLOTH_FEED_CEILING_MARKER"
+    # This source was chosen at AppImage build time. The index can only supply its dependencies.
+    case "$_unsloth_desktop_install_spec" in *.whl) return 0 ;; esac
     if [ "${SKIP_TORCH:-false}" = true ] && [ "${PACKAGE_NAME:-unsloth}" = unsloth ]; then
         _rfi_pair=$(_rfi_no_torch_pair "$_unsloth_release_install_spec" "$_unsloth_zoo_install_spec") || {
             substep "[ERROR] Could not resolve a compatible unsloth / unsloth-zoo pair for no-torch mode." "$C_WARN"

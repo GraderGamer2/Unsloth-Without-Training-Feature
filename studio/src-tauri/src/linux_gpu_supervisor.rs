@@ -400,6 +400,7 @@ fn app_command(fallback: bool, shown: bool) -> Command {
         .next()
         .unwrap_or_else(|| OsString::from("unsloth-studio"));
     let mut command = Command::new(app_program(std::env::current_exe()));
+    crate::linux_storage::restore_host_environment(&mut command);
     command.arg0(arg0).args(relaunch_args(args, shown));
     if fallback {
         command.env(FALLBACK_ENV, FALLBACK_REASON);

@@ -338,7 +338,13 @@ def _npu_root() -> Path:
 
 
 def npu_model_dir() -> Path:
-    """FastFlowLM's FLM_MODEL_PATH. Fixed under the Unsloth Studio home; not movable yet."""
+    """FastFlowLM's FLM_MODEL_PATH."""
+    from utils.paths.storage_roots import fixed_linux_desktop_storage
+
+    if fixed_linux_desktop_storage():
+        from utils.hf_cache_settings import get_hf_cache_paths
+
+        return get_hf_cache_paths().cache_home / "FastFlowLM"
     return _npu_root() / "flm"
 
 
@@ -468,7 +474,7 @@ class LemonadeNpuBackend:
     @property
     def _flm_model_dir(self) -> Path:
         """FastFlowLM's FLM_MODEL_PATH, where its models and Studio's downloads of them live."""
-        return self.root / "flm"
+        return npu_model_dir() if self._root is None else self._root / "flm"
 
     def _installed_lemond(self) -> Optional[Path]:
         try:

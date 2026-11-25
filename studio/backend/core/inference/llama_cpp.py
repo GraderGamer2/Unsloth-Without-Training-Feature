@@ -22123,10 +22123,10 @@ class LlamaCppBackend:
                 logger.info("Reusing cached %s: %s", label, cached)
                 return cached
 
-        from utils.hf_cache_settings import get_hf_cache_paths
+        from utils.hf_cache_settings import model_download_hub_cache
 
-        companion_cache_dir = _hub_cache_dir_for_snapshot_path(near_path) or str(
-            get_hf_cache_paths().hub_cache
+        companion_cache_dir = model_download_hub_cache(
+            _hub_cache_dir_for_snapshot_path(near_path)
         )
 
         if _hub_download_in_flight(hf_repo):
@@ -22480,11 +22480,13 @@ class LlamaCppBackend:
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
             raise GgufDownloadCancelled("Cancelled")
-        cache_dir = _engram_table_cache_dir(near_path)
         cached = _cached_engram_table(hf_repo, table, near_path)
         if cached:
             logger.info("Reusing cached %s Engram table: %s", table.precision, cached)
             return cached
+        from utils.hf_cache_settings import model_download_hub_cache
+
+        cache_dir = model_download_hub_cache(_hub_cache_dir_for_snapshot_path(near_path))
         Path(cache_dir).mkdir(parents = True, exist_ok = True)
         free_bytes = shutil.disk_usage(cache_dir).free
         if table.size_bytes > free_bytes:

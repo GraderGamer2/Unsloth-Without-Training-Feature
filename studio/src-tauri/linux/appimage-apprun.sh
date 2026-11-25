@@ -23,7 +23,8 @@ unsloth_host_env() {
   [ "${APPIMAGE_GTK_THEME+x}" = x ] || unset GTK_THEME
   # A bundled-mode parent relaunching (an in-app update) passes its Jammy font policy back in.
   case "${FONTCONFIG_FILE:-}" in
-    */unsloth-studio/fonts-*.conf | */usr/etc/fonts/unsloth-appimage.conf) unset FONTCONFIG_FILE ;;
+    */unsloth-studio/fonts-*.conf | */.unsloth/studio/cache/appimage-fonts/fonts-*.conf | */usr/etc/fonts/unsloth-appimage.conf)
+      unset FONTCONFIG_FILE ;;
   esac
   [ "${XDG_DATA_DIRS+x}" = x ] || return 0
   unsloth_hooked="${unsloth_hook_appdir:-$APPDIR}"
@@ -134,9 +135,12 @@ if [ "$unsloth_webkit_mode" = bundled ]; then
   # Keep Jammy's Skia off host COLRv1 fonts. Fontconfig 2.13 misresolves relative paths, so write
   # this mount's absolute path (XML/sed-encoded; the AppImage name is in it) into user state.
   unsloth_fonts_template="$APPDIR/usr/etc/fonts/unsloth-appimage.conf"
-  unsloth_fonts_state="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-${HOME:-}/.cache}}/unsloth-studio"
+  unsloth_fonts_state=
+  case "${HOME:-}" in
+    /*) unsloth_fonts_state="$HOME/.unsloth/studio/cache/appimage-fonts" ;;
+  esac
   FONTCONFIG_FILE="$unsloth_fonts_template"
-  if [ -r "$unsloth_fonts_template" ] &&
+  if [ -n "$unsloth_fonts_state" ] && [ -r "$unsloth_fonts_template" ] &&
     mkdir -p "$unsloth_fonts_state" 2>/dev/null &&
     unsloth_fonts_appdir="$(printf '%s' "$APPDIR" | sed \
       -e 's,&,\&amp;,g' -e 's,<,\&lt;,g' -e 's,>,\&gt;,g' \

@@ -212,6 +212,11 @@ pub(crate) async fn check_desktop_update(
     webview: tauri::Webview,
     state: tauri::State<'_, DesktopUpdateState>,
 ) -> Result<Option<DesktopUpdateMetadata>, String> {
+    // An upstream AppImage would replace the fork and its storage policy.
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return Ok(None);
+    }
     let app = webview.app_handle().clone();
     let builder = webview.updater_builder().on_before_exit(move || {
         #[cfg(windows)]

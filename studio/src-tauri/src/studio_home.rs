@@ -41,10 +41,18 @@ pub(crate) fn studio_root_for_home(home: &Path) -> PathBuf {
 }
 
 pub(crate) fn studio_root() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return dirs::home_dir().map(|home| default_root_for_home(&home));
+    }
     dirs::home_dir().map(|home| studio_root_for_home(&home))
 }
 
 pub(crate) fn chosen_root() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return None;
+    }
     dirs::home_dir().and_then(|home| chosen_root_for_home(&home))
 }
 
@@ -151,7 +159,7 @@ pub struct StudioInstallLocation {
 }
 
 fn location_for_home(home: &Path) -> StudioInstallLocation {
-    let chosen = chosen_root_for_home(home);
+    let chosen = if cfg!(windows) { chosen_root_for_home(home) } else { None };
     StudioInstallLocation {
         is_default: chosen.is_none(),
         path: chosen

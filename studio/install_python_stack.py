@@ -9913,6 +9913,11 @@ def _no_torch_pair(
 def _desktop_unsloth_spec(package_name: str) -> "tuple[str, str]":
     """Backend requirements permitted by the Desktop floor and package index (#14031)."""
     zoo_spec = "unsloth-zoo"
+    wheel = os.environ.get("UNSLOTH_DESKTOP_BACKEND_WHEEL", "")
+    if package_name == "unsloth" and wheel and os.environ.get("UNSLOTH_LINUX_DESKTOP_STORAGE") == "1":
+        if not Path(wheel).is_file():
+            raise RuntimeError("Bundled Unsloth backend wheel is missing.")
+        return wheel, "unsloth-zoo>=2026.11.11"
     desktop_min_ver = os.environ.get("UNSLOTH_DESKTOP_BACKEND_VERSION", "").strip()
     if package_name != "unsloth" or (not desktop_min_ver and not NO_TORCH):
         return package_name, zoo_spec

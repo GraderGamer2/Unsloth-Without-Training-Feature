@@ -79,6 +79,34 @@ def test_environment_cache_is_read_only(monkeypatch, tmp_path):
         hf_cache_settings.set_hf_cache_home(str(tmp_path / "other"))
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason = "fixed Linux desktop storage")
+def test_linux_desktop_downloads_keep_legacy_models_readable(monkeypatch, tmp_path):
+    models = tmp_path / ".unsloth" / "Models"
+    old_hub = tmp_path / "shared" / "hub"
+    requested = tmp_path / "other-drive"
+    monkeypatch.setenv("UNSLOTH_LINUX_DESKTOP_STORAGE", "1")
+    monkeypatch.setenv("UNSLOTH_LEGACY_HF_HUB_CACHE", str(old_hub))
+    monkeypatch.setenv("HF_HOME", str(tmp_path / ".unsloth" / "studio" / "huggingface"))
+    monkeypatch.setenv("HF_HUB_CACHE", str(models / "hub"))
+    monkeypatch.setenv("HF_XET_CACHE", str(tmp_path / ".unsloth" / "studio" / "cache" / "xet"))
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising = False)
+    monkeypatch.setattr(
+        hf_cache_settings,
+        "_EXPLICIT_CACHE_ENV",
+        {name: os.environ[name] for name in ("HF_HUB_CACHE", "HF_XET_CACHE")},
+    )
+
+    paths = hf_cache_settings.initialize_hf_cache_environment()
+    assert paths.cache_home == models
+    assert paths.hub_cache.is_dir()
+    assert hf_cache_settings.download_cache_paths(str(requested)) == paths
+    assert hf_cache_settings.model_download_hub_cache(str(old_hub)) == str(paths.hub_cache)
+    assert old_hub in hf_cache_settings.known_hf_hub_cache_candidates()
+    assert old_hub in hf_cache_settings.known_hf_hub_caches()
+    assert not requested.exists()
+    assert not old_hub.exists()
+
+
 def test_explicit_hub_cache_is_the_displayed_location(monkeypatch, tmp_path):
     custom_hub = tmp_path / "models-cache"
     custom_hub.mkdir()

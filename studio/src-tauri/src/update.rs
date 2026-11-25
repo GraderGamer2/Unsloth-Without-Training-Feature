@@ -111,7 +111,10 @@ fn spawn_update(
     // On Windows the context drops PYTHONPATH itself: -I covers only the first interpreter.
 
     #[cfg(target_os = "linux")]
-    crate::process::scrub_appimage_python_env(&mut cmd);
+    {
+        crate::process::scrub_appimage_python_env(&mut cmd);
+        crate::linux_storage::set_bundled_backend_environment(&mut cmd);
+    }
 
     configure_tauri_update_environment(&mut cmd);
     configure_runtime_gate_environment(&mut cmd);

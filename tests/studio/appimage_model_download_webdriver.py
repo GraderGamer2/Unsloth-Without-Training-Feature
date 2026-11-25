@@ -397,6 +397,7 @@ def _write_backend_fixture(home: Path, request_log: Path) -> None:
                   "supports_api_only": True,
                   "supports_provision_desktop_auth": True,
                   "supports_desktop_backend_ownership": True,
+                  "supports_fixed_desktop_storage": True,
                   "studio_install_ok": True,
                   "version": FIXTURE_BACKEND_VERSION,
               }, separators = (",", ":"))}'

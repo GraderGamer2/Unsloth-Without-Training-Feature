@@ -134,6 +134,7 @@ pub(crate) fn open_detached(target: impl AsRef<std::ffi::OsStr>) -> std::io::Res
     let mut last_error = None;
     for mut cmd in open::commands(target.as_ref()) {
         scrub_appimage_launcher_env(&mut cmd);
+        crate::linux_storage::restore_host_environment(&mut cmd);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         // Same double fork + setsid as the `open` crate, so the launcher outlives us; waiting
         // reaps the intermediate child.
@@ -1906,6 +1907,10 @@ fn is_inside_windows_dir(path: &std::path::Path, windirs: &[std::path::PathBuf])
 
 /// The inherited cwd unless unusable (a system folder on Windows). Resolved per call; never a temp dir.
 pub(crate) fn managed_cli_working_dir() -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return working_dir_under(dirs::home_dir(), &[], true);
+    }
     let windirs = windows_roots();
     let appdir = std::env::var_os("APPDIR").map(std::path::PathBuf::from);
     if let Ok(cwd) = std::env::current_dir() {

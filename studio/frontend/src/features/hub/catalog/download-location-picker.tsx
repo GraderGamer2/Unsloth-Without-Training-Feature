@@ -14,7 +14,7 @@ import {
 import { useIsAccountOwner } from "@/features/auth";
 import { FolderBrowser } from "@/features/model-picker";
 import { pickHuggingFaceCacheDir } from "@/features/native-intents";
-import { isTauri } from "@/lib/api-base";
+import { isLinuxDesktop, isTauri } from "@/lib/api-base";
 import { toast } from "@/lib/toast";
 import { Folder02Icon } from "@/lib/folder-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -37,7 +37,7 @@ export function DownloadLocationPicker() {
   const { folders } = useScanFolders(menuOpen && isOwner);
   const [browserOpen, setBrowserOpen] = useState(false);
 
-  if (!isOwner) {
+  if (isLinuxDesktop || !isOwner) {
     return null;
   }
 

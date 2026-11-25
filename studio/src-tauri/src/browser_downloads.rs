@@ -337,18 +337,38 @@ fn custom_folder<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
             .and_then(|bytes| serde_json::from_slice::<FolderFile>(&bytes).ok())
             .map(|file| file.path)
     });
-    folder.clone().filter(|path| path.is_dir())
+    folder.clone().filter(|path| path.is_dir() && allowed_download_folder(path))
+}
+
+fn allowed_download_folder(_path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return dirs::home_dir()
+            .and_then(|home| fs::canonicalize(home.join(".unsloth")).ok())
+            .zip(fs::canonicalize(_path).ok())
+            .is_some_and(|(root, path)| path.starts_with(root));
+    }
+    true
 }
 
 pub(crate) fn download_folder<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     if let Some(folder) = custom_folder(app) {
         return Ok(folder);
     }
-    let folder = app
+    let default_folder = || app
         .path()
         .download_dir()
         .ok()
-        .or_else(dirs::home_dir)
+        .or_else(dirs::home_dir);
+    #[cfg(target_os = "linux")]
+    let folder = if crate::linux_storage::configured() {
+        crate::linux_storage::downloads_dir()
+    } else {
+        default_folder()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let folder = default_folder();
+    let folder = folder
         .ok_or_else(|| "Could not find a Downloads folder.".to_string())?;
     // XDG can name a Downloads folder that was never created.
     fs::create_dir_all(&folder)
@@ -365,6 +385,9 @@ fn folder_info<R: Runtime>(app: &AppHandle<R>) -> Result<DownloadFolder, String>
 
 /// Cached only once written, so Settings never shows a choice a restart would lose.
 fn set_folder<R: Runtime>(app: &AppHandle<R>, folder: Option<PathBuf>) -> Result<(), String> {
+    if folder.as_deref().is_some_and(|path| !allowed_download_folder(path)) {
+        return Err("Choose a download folder inside ~/.unsloth.".to_string());
+    }
     let file = folder_file(app).ok_or_else(|| "Could not find the app data folder.".to_string())?;
     let written = match &folder {
         Some(path) => write_json(&file, &FolderFile { path: path.clone() }),

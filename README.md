@@ -158,6 +158,22 @@ Unsloth can be used in three ways: **[Unsloth Desktop](https://unsloth.ai/downlo
 
 For Desktop's local HTTP port, set `UNSLOTH_DESKTOP_PORT=9000` in its launch environment and fully restart the app. Unset or empty uses `8888`. Choose `1024–65515`. If the port is busy, Desktop tries the next 20. It rejects ranges with browser-restricted ports. This covers backend restarts after updates. `unsloth studio -p` and LAN use separate ports.
 
+#### Linux desktop storage in this fork
+
+Linux desktop builds from this repository store app-managed files in `~/.unsloth`. The Models folder in Settings points to `~/.unsloth/Models`. The download links above point to upstream releases.
+
+| Path | Contents |
+| --- | --- |
+| `~/.unsloth/Models/` | Hugging Face model weights and companions, Torch models, and FastFlowLM models |
+| `~/.unsloth/llama.cpp/` | Managed llama.cpp binaries and runtime updates |
+| `~/.unsloth/studio/` | Backend environment, conversations, desktop settings, WebKit profile, caches, logs, and temporary files |
+| `~/.unsloth/Downloads/` | Default folder for browser downloads |
+| `~/.unsloth/Projects/` | New automatically created project workspaces |
+
+On first launch, Desktop copies existing desktop settings and WebKit data into the new location. Existing Hugging Face caches can still supply local models. The new location applies to future managed downloads. Existing project folders, imported files, and destinations selected in a Save As dialog follow their own paths. The operating system manages login integration and the AppImage mount.
+
+Linux bundles install the backend wheel built from the same checkout as the desktop app. Replace the AppImage with a build of this fork to update the desktop shell.
+
 ### Unsloth Studio (web UI)
 
 #### macOS, Linux, WSL:

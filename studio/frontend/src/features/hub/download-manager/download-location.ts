@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { isAccountOwner } from "@/features/auth";
+import { isLinuxDesktop } from "@/lib/api-base";
 import { useEffect, useState } from "react";
 
 /** Folder new model downloads go to. Absent means the Models folder. */
@@ -9,7 +10,7 @@ export const DOWNLOAD_DIR_STORAGE_KEY = "unsloth.studio.downloadDir";
 const CHANGE_EVENT = "unsloth:download-dir-change";
 
 export function getDownloadDir(): string | null {
-  if (typeof window === "undefined") {
+  if (isLinuxDesktop || typeof window === "undefined") {
     return null;
   }
   try {
@@ -26,13 +27,14 @@ export function getDownloadDir(): string | null {
 export function downloadDirForRequest(
   pinned?: string | null,
 ): string | undefined {
-  if (!isAccountOwner()) {
+  if (isLinuxDesktop || !isAccountOwner()) {
     return undefined;
   }
   return (pinned === undefined ? getDownloadDir() : pinned) ?? undefined;
 }
 
 export function setDownloadDir(path: string | null): void {
+  if (isLinuxDesktop) return;
   try {
     if (path?.trim()) {
       window.localStorage.setItem(DOWNLOAD_DIR_STORAGE_KEY, path);

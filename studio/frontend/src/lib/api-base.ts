@@ -12,6 +12,7 @@ function detectTauri(): boolean {
 }
 
 const isTauri = detectTauri()
+export const isLinuxDesktop = isTauri && /Linux/i.test(navigator.userAgent)
 
 if (isTauri) {
   // never connects; real port arrives via server-port

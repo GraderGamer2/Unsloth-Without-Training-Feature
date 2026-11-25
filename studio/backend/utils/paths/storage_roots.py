@@ -234,6 +234,10 @@ def workspace_root() -> Path:
     return root / "accounts" / current_account().account_id
 
 
+def fixed_linux_desktop_storage() -> bool:
+    return sys.platform == "linux" and os.environ.get("UNSLOTH_LINUX_DESKTOP_STORAGE") == "1"
+
+
 def cache_root() -> Path:
     """Central cache dir for all studio downloads (models, datasets, etc.). Shared."""
     return studio_root() / "cache"
@@ -1059,7 +1063,10 @@ def _use_studio_uv_tools() -> None:
     one there when PATH had none or one below its minimum."""
     root = studio_root()
     try:
-        if root.resolve() == (Path.home() / ".unsloth" / "studio").resolve():
+        if (
+            not fixed_linux_desktop_storage()
+            and root.resolve() == (Path.home() / ".unsloth" / "studio").resolve()
+        ):
             return
     except (OSError, RuntimeError, ValueError):
         return

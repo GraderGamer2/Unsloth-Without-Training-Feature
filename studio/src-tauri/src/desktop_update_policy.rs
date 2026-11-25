@@ -61,6 +61,10 @@ pub(crate) fn desktop_update_policy() -> DesktopUpdatePolicy {
 
 #[tauri::command]
 pub(crate) async fn check_desktop_manual_update() -> Result<Option<ManualUpdateInfo>, String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return Ok(None);
+    }
     if !matches!(desktop_update_mode(), DesktopUpdateMode::ManualLinuxPackage) {
         return Ok(None);
     }

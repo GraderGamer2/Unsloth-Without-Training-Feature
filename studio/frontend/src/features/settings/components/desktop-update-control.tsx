@@ -4,6 +4,7 @@
 import { Button } from "@/components/ui/button";
 import { useTauriUpdateController } from "@/hooks/tauri-update-context";
 import { useT } from "@/i18n";
+import { isLinuxDesktop } from "@/lib/api-base";
 import type { ReactElement } from "react";
 import { SettingsRow } from "./settings-row";
 
@@ -14,7 +15,7 @@ function formatDesktopVersion(version: string): string {
 export function DesktopUpdateControl(): ReactElement | null {
   const t = useT();
   const update = useTauriUpdateController();
-  if (!update) return null;
+  if (!update || isLinuxDesktop) return null;
 
   const checking = update.status === "checking";
   const inFlight =

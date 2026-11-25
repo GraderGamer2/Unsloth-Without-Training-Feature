@@ -622,7 +622,7 @@ def test_apprun_hands_an_inherited_library_path_to_children_only(tmp_path):
 
     appdir = _apprun_mount(tmp_path)
     apprun = appdir / "AppRun"
-    template = appdir / "usr/etc/fonts/unsloth-appimage.conf"
+    home = tmp_path / "home"
     state = tmp_path / "state"
 
     result = subprocess.run(
@@ -632,6 +632,7 @@ def test_apprun_hands_an_inherited_library_path_to_children_only(tmp_path):
         text = True,
         env = {
             "PATH": "/usr/bin:/bin",
+            "HOME": str(home),
             "LD_LIBRARY_PATH": "/opt/conda/lib:/opt/rocm/lib",
             "XDG_RUNTIME_DIR": str(state),
         },
@@ -640,7 +641,8 @@ def test_apprun_hands_an_inherited_library_path_to_children_only(tmp_path):
     assert not [line for line in printed if line.startswith("LD_LIBRARY_PATH=")]
     assert "UNSLOTH_HOST_LD_LIBRARY_PATH=/opt/conda/lib:/opt/rocm/lib" in printed
 
-    materialized = state / "unsloth-studio/fonts-AppDir.conf"
+    materialized = home / ".unsloth/studio/cache/appimage-fonts/fonts-AppDir.conf"
+    assert not state.exists()
     assert f"FONTCONFIG_FILE={materialized}" in printed
     assert f"<dir>{appdir}/usr/share/unsloth/fonts</dir>" in materialized.read_text(
         encoding = "utf-8"
@@ -707,16 +709,17 @@ def test_apprun_bundled_relaunch_redecides_the_atk_bridge_default(tmp_path):
 def test_apprun_retires_only_the_font_policies_whose_mount_is_gone(tmp_path):
     """A later launch preserves live-mount policies and removes departed ones."""
 
-    state = tmp_path / "state"
-    env = {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(state)}
+    home = tmp_path / "home"
+    state = home / ".unsloth/studio/cache/appimage-fonts"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(home)}
     live = _apprun_mount(tmp_path, "mount-live")
     subprocess.run([live / "AppRun"], check = True, capture_output = True, env = env)
-    live_policy = state / "unsloth-studio/fonts-mount-live.conf"
+    live_policy = state / "fonts-mount-live.conf"
     assert live_policy.is_file()
 
     dead = _apprun_mount(tmp_path, "mount-dead")
     subprocess.run([dead / "AppRun"], check = True, capture_output = True, env = env)
-    dead_policy = state / "unsloth-studio/fonts-mount-dead.conf"
+    dead_policy = state / "fonts-mount-dead.conf"
     assert dead_policy.is_file()
     shutil.rmtree(dead)
 
@@ -725,7 +728,7 @@ def test_apprun_retires_only_the_font_policies_whose_mount_is_gone(tmp_path):
 
     assert live_policy.is_file(), "a running instance lost its font policy"
     assert not dead_policy.exists(), "a departed mount's font policy was kept"
-    later_policy = state / "unsloth-studio/fonts-mount-later.conf"
+    later_policy = state / "fonts-mount-later.conf"
     assert f"FONTCONFIG_FILE={later_policy}" in result.stdout.splitlines()
     assert later_policy.is_file()
 
@@ -735,17 +738,17 @@ def test_apprun_encodes_a_mount_path_carrying_xml_and_sed_metacharacters(tmp_pat
 
     # An AppImage named "R&D<x>.AppImage" mounts under /tmp/.mount_R&D<x>XXXXXX.
     appdir = _apprun_mount(tmp_path, "mount-R&D<x>|y\\z")
-    state = tmp_path / "state"
+    home = tmp_path / "home"
 
     result = subprocess.run(
         [appdir / "AppRun"],
         check = True,
         capture_output = True,
         text = True,
-        env = {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(state)},
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(home)},
     )
 
-    materialized = state / f"unsloth-studio/fonts-{appdir.name}.conf"
+    materialized = home / f".unsloth/studio/cache/appimage-fonts/fonts-{appdir.name}.conf"
     assert f"FONTCONFIG_FILE={materialized}" in result.stdout.splitlines()
     policy = materialized.read_text(encoding = "utf-8")
     assert "@APPDIR@" not in policy
@@ -760,11 +763,11 @@ def test_apprun_encodes_a_mount_path_carrying_xml_and_sed_metacharacters(tmp_pat
 def test_apprun_keeps_a_live_policy_whose_mount_path_needed_encoding(tmp_path):
     """Cleanup compares mounts on disk, so it has to decode what it wrote."""
 
-    state = tmp_path / "state"
-    env = {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(state)}
+    home = tmp_path / "home"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(home)}
     live = _apprun_mount(tmp_path, "mount-R&D<x>")
     subprocess.run([live / "AppRun"], check = True, capture_output = True, env = env)
-    live_policy = state / f"unsloth-studio/fonts-{live.name}.conf"
+    live_policy = home / f".unsloth/studio/cache/appimage-fonts/fonts-{live.name}.conf"
     assert live_policy.is_file()
 
     later = _apprun_mount(tmp_path, "mount-later")
@@ -787,7 +790,7 @@ def test_apprun_falls_back_to_the_shipped_font_policy_when_it_cannot_write(tmp_p
         check = True,
         capture_output = True,
         text = True,
-        env = {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(unwritable / "state")},
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(unwritable / "home")},
     )
     assert f"FONTCONFIG_FILE={template}" in result.stdout.splitlines()
 
@@ -950,6 +953,7 @@ def _launch(
     base = {
         "PATH": "/usr/bin:/bin",
         "APPDIR": str(appdir),
+        "HOME": str(tmp_path / "home"),
         "XDG_RUNTIME_DIR": str(tmp_path / "state"),
         "FAKE_PROBE_MARKER": str(tmp_path / "probe-ran"),
     }
@@ -1049,14 +1053,15 @@ def test_apprun_host_mode_keeps_an_explicit_theme_and_survives_a_relaunch(tmp_pa
     "policy",
     [
         "{state}/unsloth-studio/fonts-.mount_UnslotOLD.conf",
+        "{home}/.unsloth/studio/cache/appimage-fonts/fonts-.mount_UnslotOLD.conf",
         "/tmp/.mount_UnslotOLD/usr/etc/fonts/unsloth-appimage.conf",
     ],
-    ids = ["written", "template"],
+    ids = ["legacy-written", "written", "template"],
 )
 def test_apprun_host_mode_drops_a_bundled_parents_font_policy(tmp_path, policy):
     # The updater's relaunch inherits the bundled-mode parent's FONTCONFIG_FILE.
     appdir = _apprun_mount(tmp_path, host_copy = True, hooked = True)
-    inherited = policy.format(state = tmp_path / "state")
+    inherited = policy.format(state = tmp_path / "state", home = tmp_path / "home")
     run = _launch(
         appdir, tmp_path, FONTCONFIG_FILE = inherited, UNSLOTH_APPIMAGE_WEBKIT_MODE = "bundled"
     )
@@ -1185,7 +1190,7 @@ MAIN_APPRUN_REVISION = "a1064bb8e6dbbd527761436605c20cdb59cb2a94"
     ids = ["no-copy", "probe-127", "2.52", "override", "invalid"],
 )
 def test_bundled_mode_matches_the_launcher_before_host_mode(tmp_path, host_copy, knobs, reason):
-    """Bundled mode adds only UNSLOTH_APPIMAGE_WEBKIT_MODE and its one stderr line."""
+    """Bundled mode keeps the launcher environment except for its mode and font policy path."""
 
     shown = subprocess.run(
         [
@@ -1215,7 +1220,10 @@ def test_bundled_mode_matches_the_launcher_before_host_mode(tmp_path, host_copy,
         assert current[key] == before[key]
     added = {k: v for k, v in current["env"].items() if before["env"].get(k) != v}
     removed = set(before["env"]) - set(current["env"])
-    assert added == {"UNSLOTH_APPIMAGE_WEBKIT_MODE": "bundled"}
+    assert added == {
+        "UNSLOTH_APPIMAGE_WEBKIT_MODE": "bundled",
+        "FONTCONFIG_FILE": str(tmp_path / "home/.unsloth/studio/cache/appimage-fonts/fonts-AppDir.conf"),
+    }
     assert not removed
 
 

@@ -1,4 +1,10 @@
 {
+  "build": {
+    "beforeBuildCommand": {
+      "cwd": "../frontend",
+      "script": "npm run build && sh ../src-tauri/linux/build-backend-wheel.sh"
+    }
+  },
   "app": {
     "windows": [
       {
@@ -30,7 +36,8 @@
       "icons/linux/256x256.png"
     ],
     "resources": {
-      "../../install.sh": "install.sh"
+      "../../install.sh": "install.sh",
+      "backend-wheel/": "backend-wheel/"
     }
   }
 }

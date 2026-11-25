@@ -934,7 +934,11 @@ pub async fn start_managed_repair(
     let repair_group_id = install::take_pending_repair_group_for_resume(&install_state)
         .unwrap_or_else(|| diagnostics::begin_repair_group(&diagnostics_state));
 
-    let update_result = if force_installer {
+    #[cfg(target_os = "linux")]
+    let use_installer = force_installer || crate::linux_storage::bundled_backend_version().is_some();
+    #[cfg(not(target_os = "linux"))]
+    let use_installer = force_installer;
+    let update_result = if use_installer {
         let _ = app.emit("repair-progress", "Running bundled installer...");
         Ok(())
     } else {
@@ -956,7 +960,7 @@ pub async fn start_managed_repair(
     };
 
     match update_result {
-        Ok(()) if force_installer => {}
+        Ok(()) if use_installer => {}
         Ok(()) => match managed_install_not_ready_after_repair().await {
             None => {
                 info!("Managed repair complete after update");

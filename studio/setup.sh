@@ -1482,10 +1482,14 @@ _clear_webview_caches() {
             _wvc_root="$HOME/Library/Application Support/$_wvc_bid"
             ;;
         Linux)
-            # A relative XDG_DATA_HOME is invalid per XDG: use the default, never rm -rf under the cwd.
-            _wvc_data="${XDG_DATA_HOME:-$HOME/.local/share}"
-            case "$_wvc_data" in /*) ;; *) _wvc_data="$HOME/.local/share" ;; esac
-            _wvc_data="$_wvc_data/$_wvc_bid"
+            if [ "${UNSLOTH_LINUX_DESKTOP_STORAGE:-}" = 1 ]; then
+                _wvc_data="$HOME/.unsloth/studio/desktop/data"
+            else
+                # A relative XDG_DATA_HOME is invalid; never rm -rf under the cwd.
+                _wvc_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+                case "$_wvc_data" in /*) ;; *) _wvc_data="$HOME/.local/share" ;; esac
+                _wvc_data="$_wvc_data/$_wvc_bid"
+            fi
             _wvc_paths=(
                 "$_wvc_data/WebKitCache"
                 "$_wvc_data/CacheStorage"

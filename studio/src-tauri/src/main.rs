@@ -30,6 +30,8 @@ mod keep_awake;
 #[cfg(target_os = "linux")]
 mod linux_gpu_supervisor;
 #[cfg(target_os = "linux")]
+mod linux_storage;
+#[cfg(target_os = "linux")]
 mod linux_webkit;
 mod long_paths;
 mod loopback_http;
@@ -2039,6 +2041,10 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 // Same call Tauri's PathResolver uses for LocalData/<bid>, with passwd/known-folder fallbacks.
 fn webview_profile_root(bundle_id: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::configured() {
+        return dirs::home_dir().map(|home| crate::linux_storage::desktop_dir(&home).join("data"));
+    }
     dirs::data_local_dir().map(|d| d.join(bundle_id))
 }
 
@@ -2306,11 +2312,20 @@ fn main() {
         }
     }
 
+    let mut context = tauri::generate_context!();
+    #[cfg(target_os = "linux")]
+    let config_dir = match linux_storage::configure(&mut context) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            eprintln!("Could not prepare Unsloth storage: {error}");
+            std::process::exit(1);
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let config_dir = dirs::config_dir().map(|dir| dir.join(&context.config().identifier));
+
     // Must precede any Xlib call; see x11_threads.
     x11_threads::init_x11_threads();
-
-    let mut context = tauri::generate_context!();
-    let config_dir = dirs::config_dir().map(|dir| dir.join(&context.config().identifier));
     // Read before the webview starts: a changed setting applies on the next launch.
     let gpu_setting = gpu_rendering::launch_setting(config_dir.as_deref());
 
@@ -2469,9 +2484,9 @@ fn main() {
 
     extend_csp_with_hf_endpoints(&mut context);
     // Restore while hidden, else the 760x560 setup size overwrites the saved layout.
-    let restore_initial_layout = dirs::config_dir().is_some_and(|dir| {
+    let restore_initial_layout = config_dir.as_deref().is_some_and(|dir| {
         app_layout::should_restore_initial_window_state(
-            &dir.join(&context.config().identifier),
+            dir,
             tauri_plugin_window_state::DEFAULT_FILENAME,
         )
     });
@@ -2652,6 +2667,8 @@ fn main() {
             handler(invoke)
         })
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            linux_storage::load_bundled_backend(app.handle())?;
             // Resolve here, before any window path can ask: this consumes the relaunch marker.
             let launched_hidden = was_launched_hidden(app.handle().clone());
             #[cfg(not(target_os = "macos"))]
@@ -2696,7 +2713,8 @@ fn main() {
             }
             // After the staged-update reconcile, so the preflight's `-h` overlaps the webview load.
             preflight::start_launch_cli_probe();
-            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            // Linux's installed .desktop entry handles links. AppImage integration is opt-in.
+            #[cfg(all(debug_assertions, windows))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 if let Err(error) = app.deep_link().register_all() {

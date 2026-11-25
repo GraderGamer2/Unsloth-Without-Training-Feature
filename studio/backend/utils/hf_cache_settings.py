@@ -210,6 +210,7 @@ def _scan_memoized(name: str, compute):
         environ.get("XDG_CACHE_HOME"),
         environ.get("UNSLOTH_PORTABLE"),
         environ.get("UNSLOTH_HOME"),
+        environ.get("UNSLOTH_LEGACY_HF_HUB_CACHE"),
     )
     return memoized(key, compute)
 
@@ -246,6 +247,15 @@ def active_hf_hub_cache() -> str:
     """Return the current hub cache as a string for library call kwargs."""
 
     return str(get_hf_cache_paths().hub_cache)
+
+
+def model_download_hub_cache(preferred: Optional[str] = None) -> str:
+    """Prefer the backbone's cache when a user can choose their download location."""
+    from utils.paths.storage_roots import fixed_linux_desktop_storage
+
+    if preferred and not fixed_linux_desktop_storage():
+        return preferred
+    return active_hf_hub_cache()
 
 
 @contextmanager
@@ -419,8 +429,10 @@ def set_hf_cache_home(cache_home: Optional[str]) -> HuggingFaceCachePaths:
 def download_cache_paths(download_dir: Optional[str]) -> HuggingFaceCachePaths:
     """Cache paths for one download: the Models folder, or a chosen folder laid out the same way;
     raises ValueError for a folder the Models setting would refuse."""
+    from utils.paths.storage_roots import fixed_linux_desktop_storage
+
     active = get_hf_cache_paths()
-    if download_dir is None or not download_dir.strip():
+    if fixed_linux_desktop_storage() or download_dir is None or not download_dir.strip():
         return active
     home = _validate_cache_home(download_dir)
     if os.path.normcase(str(home)) == os.path.normcase(str(_canonical(active.cache_home))):
@@ -511,6 +523,13 @@ def known_hf_hub_caches() -> list[Path]:
     return list(_scan_memoized("known_hf_hub_caches", _known_hf_hub_caches))
 
 
+def _legacy_desktop_hub() -> list[Path]:
+    legacy_hub = os.environ.get("UNSLOTH_LEGACY_HF_HUB_CACHE")
+    if legacy_hub and Path(legacy_hub).is_absolute():
+        return [Path(legacy_hub)]
+    return []
+
+
 def known_hf_hub_cache_candidates() -> list[Path]:
     """known_hf_hub_caches() in order, expanded but never resolved or touched (a dead mount hangs), so a caller can
     probe each under its own budget. May hold two spellings of one directory."""
@@ -531,8 +550,7 @@ def known_hf_hub_cache_candidates() -> list[Path]:
     homes.append(_default_cache_home())
     out = [Path(paths.hub_cache)]
     seen = {os.path.normcase(os.path.normpath(str(out[0])))}
-    for home in homes:
-        hub = home / "hub"
+    for hub in (*_legacy_desktop_hub(), *(home / "hub" for home in homes)):
         key = os.path.normcase(os.path.normpath(str(hub)))
         if key not in seen:
             seen.add(key)
@@ -544,8 +562,12 @@ def _known_hf_hub_caches() -> list[Path]:
     active = get_hf_cache_paths()
     out = [active.hub_cache]
     seen = {os.path.normcase(str(_canonical(active.hub_cache)))}
-    for home in known_hf_cache_homes():
-        hub = _canonical(home / "hub")
+    legacy = _legacy_desktop_hub()
+    for candidate in (*legacy, *(home / "hub" for home in known_hf_cache_homes())):
+        try:
+            hub = _canonical(candidate)
+        except (OSError, RuntimeError, ValueError):
+            continue
         key = os.path.normcase(str(hub))
         if key not in seen:
             seen.add(key)
