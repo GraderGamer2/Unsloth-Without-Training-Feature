@@ -32,6 +32,7 @@ import struct
 from core.inference.inference_gate import holds_inference
 from core.inference.http_stream import SSE_LINE_END
 from loggers import get_logger
+from utils.gpu_policy import amd_only
 from utils.gpu_memory_events import invalidate_gpu_memory as _invalidate_gpu_memory
 from utils import host_memory as _host_memory
 from utils.gpu_memory_events import invalidates_gpu_memory as _invalidates_gpu_memory
@@ -13950,6 +13951,8 @@ class LlamaCppBackend:
         """The driver's own NVML, via ctypes: present exactly when nvidia-smi is, and
         no Python dependency (nvidia-ml-py is NOT installed in a Studio env). None
         when it cannot be loaded."""
+        if amd_only():
+            return None
         if os.name == "nt":
             # nvml.dll can sit in NVSMI\ rather than a DLL search path, as nvidia-smi.exe
             # does (see _nvidia_smi_executable in utils/hardware/nvidia.py).

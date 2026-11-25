@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 
+from utils.gpu_policy import amd_only
 from utils.subprocess_compat import windows_hidden_subprocess_kwargs
 import sys
 import sysconfig
@@ -151,6 +152,8 @@ _kfd_has_amd_gpu: bool | None = None
 def gpu_platform() -> str:
     """The GPU family the engine runs on: "rocm" for AMD, else "cuda". A host with both, and
     every Windows host, follows Studio's own PyTorch."""
+    if amd_only():
+        return "rocm"
     global _kfd_has_amd_gpu
     from utils.hardware import hardware
 
@@ -610,6 +613,8 @@ def stale(info: dict) -> bool:
 def built_for_this_gpu(engine: str, info: dict) -> bool:
     """Whether an environment runs on this host's GPU platform; one from before AMD support is CUDA.
     A restored environment skips the profile check, so this keeps it off the other vendor's GPU."""
+    if amd_only():
+        return "rocm" in PROFILES[engine] and info.get("platform") == "rocm"
     return info.get("platform", "cuda") == profile(engine)["platform"]
 
 

@@ -2881,6 +2881,7 @@ print(f"{v.value // 1000}.{v.value % 1000 // 10}")
 
 # ── NVIDIA usable-GPU helper ──
 _has_usable_nvidia_gpu() {
+    [ "${UNSLOTH_AMD_ONLY:-0}" != 1 ] || return 1
     _nv_smi_wedged=""
     if _cvd_hides_nvidia; then
         return 1
@@ -6467,6 +6468,19 @@ _maybe_bootstrap_rocm_wsl() {
     [ -n "$_rw_tmp" ] && rm -f "$_rw_tmp"
     return 0
 }
+if [ "${UNSLOTH_AMD_ONLY:-0}" = 1 ]; then
+    # Only accept index pins for wheel families this build can run.
+    case "$(_torch_index_url_leaf "${UNSLOTH_TORCH_INDEX_URL:-${UNSLOTH_TORCH_INDEX_FAMILY:-}}")" in
+        cpu|rocm*|gfx[0-9]*) ;;
+        *) unset UNSLOTH_TORCH_INDEX_URL UNSLOTH_TORCH_INDEX_FAMILY ;;
+    esac
+    case "${UNSLOTH_TORCH_BACKEND:-}" in
+        ''|cpu|rocm) ;;
+        *) unset UNSLOTH_TORCH_BACKEND UNSLOTH_TORCH_BACKEND_SOURCE ;;
+    esac
+    unset UV_TORCH_BACKEND
+    export UNSLOTH_DISABLE_XPU_AUTO=1
+fi
 _torch_index_pinned=false
 _ti_url_trim="${UNSLOTH_TORCH_INDEX_URL:-}"
 _ti_url_trim="${_ti_url_trim#"${_ti_url_trim%%[![:space:]]*}"}"; _ti_url_trim="${_ti_url_trim%"${_ti_url_trim##*[![:space:]]}"}"
@@ -6502,6 +6516,9 @@ if [ "$_torch_index_pinned" = false ] && [ "$SKIP_TORCH" = false ]; then
     _has_usable_nvidia_gpu >/dev/null 2>&1 || true
 fi
 TORCH_INDEX_URL=$(get_torch_index_url)
+if [ "${UNSLOTH_AMD_ONLY:-0}" = 1 ] && [ -z "$TORCH_INDEX_URL" ]; then
+    TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+fi
 
 # Runtime-less reroute to AMD per-arch wheels when the gfx is inferable (unslothai#7301, #7314).
 # A readable gfx with an unsupported ROCm version stays on cpu; an unreadable version is rerouted.

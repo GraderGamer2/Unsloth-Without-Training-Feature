@@ -26,6 +26,7 @@ from typing import Any, NamedTuple, Optional, Sequence
 if __package__:
     from . import prebuilt_core as _core
     from .backend.utils.auth_safe import auth_safe_open
+    from .backend.utils.gpu_policy import amd_only
     from .backend.utils.subprocess_compat import windows_loader_error_boxes_suppressed
 else:
     _STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,7 @@ else:
         sys.path.insert(0, _STUDIO_DIR)
     import prebuilt_core as _core
     from backend.utils.auth_safe import auth_safe_open
+    from backend.utils.gpu_policy import amd_only
     from backend.utils.subprocess_compat import windows_loader_error_boxes_suppressed
 
 # GPU hosts run diffusers, so only CPU/Apple assets are needed.
@@ -1273,6 +1275,8 @@ def _resolve_with_fallback(
     cuda_major: Optional[str] = None,
 ) -> tuple[str, Optional[dict], Optional[str]]:
     """Resolve ``(used_repo, release, asset_name)`` for this host across the primary repo and, only when the built-in default is in use and the user did not pin a repo, the upstream fallback. Ordering guarantees reproducibility: a pinned tag is tried EXACTLY on every candidate repo before any repo's unpinned latest, so a mirror missing the pinned release prefers the pinned upstream build over an unpinned mirror-latest. Returns ``(primary, None, None)`` when nothing serves this host. Shared by ``install`` and ``--print-asset`` so both honour the same fallback."""
+    if amd_only() and accelerator_class(accelerator) not in ("cpu", "rocm", "vulkan"):
+        raise RuntimeError(f"The AMD AppImage cannot install the {accelerator} sd.cpp backend")
     tag = _pinned_tag()
     primary = _repo()
     # An explicit UNSLOTH_SD_CPP_REPO gets exactly that repo, no upstream fallback.

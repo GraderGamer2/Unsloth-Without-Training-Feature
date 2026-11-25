@@ -26,6 +26,7 @@ if _STUDIO_DIR not in sys.path:
 
 import install_llama_prebuilt as llama  # noqa: E402
 import prebuilt_core as core  # noqa: E402
+from backend.utils.gpu_policy import amd_only  # noqa: E402
 
 # Re-exported as globals so tests can monkeypatch them here.
 PrebuiltFallback = core.PrebuiltFallback
@@ -239,6 +240,8 @@ def auto_detect_backend(host: HostInfo) -> str:
 
 
 def resolve_backend(host: HostInfo, requested: str | None, *, cpu_fallback: bool) -> str:
+    if amd_only() and (requested or "").strip().lower() == "cuda":
+        raise PrebuiltFallback("The AMD AppImage cannot install the CUDA whisper.cpp backend")
     return core.resolve_backend(_OPS, host, requested, cpu_fallback = cpu_fallback)
 
 

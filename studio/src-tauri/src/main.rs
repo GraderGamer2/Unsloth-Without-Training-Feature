@@ -28,6 +28,8 @@ mod install;
 mod install_watchdog;
 mod keep_awake;
 #[cfg(target_os = "linux")]
+mod linux_gpu;
+#[cfg(target_os = "linux")]
 mod linux_gpu_supervisor;
 #[cfg(target_os = "linux")]
 mod linux_storage;

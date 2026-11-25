@@ -632,6 +632,9 @@ fn x11_display_open(display: Option<OsString>, socket_dir: &str) -> bool {
 
 /// None without the module; Some(0) when its version cannot be read, which keeps the fallback.
 fn nvidia_driver_branch() -> Option<u32> {
+    if std::env::var_os("UNSLOTH_AMD_ONLY").is_some_and(|value| value == "1") {
+        return None;
+    }
     let path = std::path::Path::new(NVIDIA_DRIVER_VERSION_PATH);
     if !path.exists() {
         return None;
@@ -829,6 +832,9 @@ fn smooth_scrolling_with(policy_never: bool, disable_compositing: Option<&OsStr>
 
 /// First line of the NVIDIA kernel module banner, which names its version and flavour.
 pub fn nvidia_driver_version_line() -> Option<String> {
+    if std::env::var_os("UNSLOTH_AMD_ONLY").is_some_and(|value| value == "1") {
+        return None;
+    }
     let text = std::fs::read_to_string(NVIDIA_DRIVER_VERSION_PATH).ok()?;
     let line = text.lines().next()?.trim();
     (!line.is_empty()).then(|| line.to_string())

@@ -19,6 +19,7 @@ from typing import Any, Iterator, Optional, Sequence
 
 from loggers import get_logger
 from utils import gpu_memory_events as _events
+from utils.gpu_policy import amd_only
 
 logger = get_logger(__name__)
 
@@ -392,6 +393,8 @@ def run_nvidia_smi(
     **kwargs: Any,
 ) -> subprocess.CompletedProcess:
     """Drop-in for ``subprocess.run``. ``cache=False``: CLI always runs, only the bounded wait applies."""
+    if amd_only():
+        raise FileNotFoundError("NVIDIA GPU queries are disabled in the AMD AppImage")
     argv = list(argv)
     if not enabled():
         return subprocess.run(argv, timeout = timeout, **kwargs)

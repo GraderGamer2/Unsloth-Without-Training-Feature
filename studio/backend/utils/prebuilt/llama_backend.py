@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
+from ..gpu_policy import amd_only
+
 # The standalone installer imports this map, so both share one vocabulary.
 INSTALL_KIND_BACKENDS: dict[str, str] = {
     "linux-cuda": "cuda",
@@ -31,6 +33,11 @@ INSTALL_KIND_BACKENDS: dict[str, str] = {
 
 # metal is absent: it is the only macOS build, so there is nothing to choose.
 REQUESTABLE_BACKENDS = ("auto", "cpu", "cuda", "rocm", "vulkan")
+AMD_BACKENDS = ("auto", "cpu", "rocm", "vulkan")
+
+
+def requestable_backends() -> tuple[str, ...]:
+    return AMD_BACKENDS if amd_only() else REQUESTABLE_BACKENDS
 
 # Longest-token-first, so "cuda13-older" cannot read as something else.
 _ASSET_BACKEND_TOKENS = (

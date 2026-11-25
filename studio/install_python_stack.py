@@ -53,6 +53,7 @@ def _nvidia_library_inventory():
     return _nvidia_probe.probe() if _nvidia_probe is not None else None
 
 
+from backend.utils.gpu_policy import amd_only
 from backend.utils.kernel_install import (
     KERNELS,
     gpu_below_flash_attn_floor,
@@ -2868,6 +2869,8 @@ def _has_usable_nvidia_gpu() -> bool:
     that env var, so check it first and report the GPU as not usable. Unset
     means all devices visible.
     """
+    if amd_only():
+        return False
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
     if cvd is not None and cvd.strip() in ("", "-1"):
         return False
@@ -4319,7 +4322,7 @@ def _ensure_cuda_torch(*, probe_only: bool = False) -> "bool | None":
     False: a repair is required but the mirror cannot express its index; the caller aborts.
     """
     # Respect install.sh's backend: only "" (standalone update) or "cuda" force CUDA wheels.
-    if _TORCH_BACKEND not in ("", "cuda"):
+    if amd_only() or _TORCH_BACKEND not in ("", "cuda"):
         return
     # An explicit unknown-family pin was applied VERBATIM at install time; leave it alone.
     if _explicit_unknown_family_torch_index_url() is not None:
@@ -4527,6 +4530,8 @@ def _ensure_xpu_torch(probe_only: bool = False) -> "bool | None":
     answers True where a repair (or that False) would happen, and installs nothing.
     """
     if NO_TORCH or IS_MACOS or IS_WINDOWS:
+        return
+    if amd_only():
         return
     pin = _explicit_xpu_torch_index_url()
     _source = "an explicit XPU index is pinned"
@@ -4847,6 +4852,9 @@ def _ensure_cpu_torch() -> "bool | None":
     if pin is None:
         if _rocm_miscomputing_host():
             _reason = "this AMD arch computes incorrectly under ROCm (studio/ROCM_RDNA2_APU.md)"
+        elif amd_only() and _installed_flavor_tag_now("cpu") not in ("", "cpu", "rocm"):
+            # The ROCm repair has already had its turn. Replace any NVIDIA/XPU wheel it left.
+            _reason = "the AMD AppImage supports ROCm and CPU PyTorch"
         elif _explicit_torch_index_family() != "cpu":
             return
         pin = _pytorch_whl_leaf_url("cpu")
@@ -6665,11 +6673,23 @@ NO_TORCH = _infer_no_torch()
 
 # Read at import: install_python_stack() drops the manifest before its dependency pass.
 _RECORDED_TORCH_TAG = install_manifest.recorded_torch_flavor()
+if amd_only() and _RECORDED_TORCH_TAG not in ("", "cpu", "rocm"):
+    _RECORDED_TORCH_TAG = ""
 # setup.ps1 publishes an automatic /cpu the same way as a pinned one.
 _RECORDED_TORCH_TAG_PINNED = install_manifest.recorded_torch_flavor_was_pinned()
 
 # Set by install.sh; empty means standalone `studio update`, which re-detects.
 _TORCH_BACKEND: str = os.environ.get("UNSLOTH_TORCH_BACKEND", "").lower()
+if amd_only():
+    if _TORCH_BACKEND not in ("", "cpu", "rocm"):
+        _TORCH_BACKEND = ""
+    _pin = _torch_index_leaf(
+        os.environ.get("UNSLOTH_TORCH_INDEX_URL", "").strip()
+        or os.environ.get("UNSLOTH_TORCH_INDEX_FAMILY", "").strip()
+    )
+    if _pin and _pin != "cpu" and not _pin.startswith(("rocm", "gfx")):
+        os.environ.pop("UNSLOTH_TORCH_INDEX_URL", None)
+        os.environ.pop("UNSLOTH_TORCH_INDEX_FAMILY", None)
 if not _TORCH_BACKEND:
     _idx_override = (
         os.environ.get("UNSLOTH_TORCH_INDEX_URL", "").strip()

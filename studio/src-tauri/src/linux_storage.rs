@@ -243,7 +243,6 @@ pub(crate) fn configure<R: tauri::Runtime>(context: &mut tauri::Context<R>) -> i
         ("NPM_CONFIG_CACHE", cache.join("npm")),
         ("TRITON_CACHE_DIR", cache.join("triton")),
         ("TRITON_DUMP_DIR", cache.join("triton-dump")),
-        ("CUDA_CACHE_PATH", cache.join("cuda")),
         ("MESA_SHADER_CACHE_DIR", cache.join("mesa")),
         ("UNSLOTH_STUDIO_PROJECTS_HOME", root.join("Projects")),
     ];
@@ -256,6 +255,7 @@ pub(crate) fn configure<R: tauri::Runtime>(context: &mut tauri::Context<R>) -> i
                 "UV_NO_MODIFY_PATH",
                 "UNSLOTH_LEGACY_HF_HUB_CACHE",
             ])
+            .chain(crate::linux_gpu::POLICY_ENV.iter().copied())
             .map(|name| (name, std::env::var_os(name)))
             .collect(),
     );
@@ -277,6 +277,7 @@ pub(crate) fn configure<R: tauri::Runtime>(context: &mut tauri::Context<R>) -> i
     }
     std::env::set_var("UV_NO_MODIFY_PATH", "1");
     std::env::set_var(FIXED_STORAGE_ENV, "1");
+    crate::linux_gpu::configure(&home, &studio);
     Ok(config)
 }
 

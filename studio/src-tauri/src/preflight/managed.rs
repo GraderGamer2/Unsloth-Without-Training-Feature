@@ -98,6 +98,8 @@ struct DesktopCapability {
     supports_desktop_backend_ownership: Option<bool>,
     #[cfg(target_os = "linux")]
     supports_fixed_desktop_storage: Option<bool>,
+    #[cfg(target_os = "linux")]
+    supports_amd_desktop: Option<bool>,
     desktop_auth_stale_reason: Option<String>,
     // A partial install answers `-h` but its backend dies on import, so a running CLI is not ready.
     studio_install_ok: Option<bool>,
@@ -1035,7 +1037,10 @@ fn feed_ceiling_holds(bin: &Path, version: Option<&str>, expected: &str) -> bool
 
 fn managed_capability_stale_reason(bin: &Path, capability: &DesktopCapability) -> Option<String> {
     #[cfg(target_os = "linux")]
-    if crate::linux_storage::configured() && capability.supports_fixed_desktop_storage != Some(true) {
+    if crate::linux_storage::configured()
+        && (capability.supports_fixed_desktop_storage != Some(true)
+            || capability.supports_amd_desktop != Some(true))
+    {
         return Some("desktop_storage_backend_required".to_string());
     }
     let reason = desktop_capability_stale_reason(capability)?;
@@ -1452,6 +1457,8 @@ mod tests {
             supports_desktop_backend_ownership: Some(true),
             #[cfg(target_os = "linux")]
             supports_fixed_desktop_storage: Some(true),
+            #[cfg(target_os = "linux")]
+            supports_amd_desktop: Some(true),
             desktop_auth_stale_reason: None,
             studio_install_ok: Some(true),
             studio_install_reason: None,

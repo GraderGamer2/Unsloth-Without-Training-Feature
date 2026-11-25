@@ -32,6 +32,7 @@ from typing import Optional, Sequence
 
 if __package__:
     from . import prebuilt_core as core
+    from .backend.utils.gpu_policy import amd_only
     from .install_sd_cpp_prebuilt import (
         GitHubRateLimited,
         _is_rate_limited,
@@ -43,6 +44,7 @@ else:
     if _STUDIO_DIR not in sys.path:
         sys.path.insert(0, _STUDIO_DIR)
     import prebuilt_core as core  # type: ignore[no-redef]
+    from backend.utils.gpu_policy import amd_only
     from install_sd_cpp_prebuilt import (  # type: ignore[no-redef]
         GitHubRateLimited,
         _is_rate_limited,
@@ -328,6 +330,8 @@ def detect_accelerator() -> str:
     if system == "darwin":
         return "metal"
     # Pascal / Volta-only hosts: the fork's bundles have no kernels for them. Other publishers set their own archs.
+    if amd_only():
+        return "vulkan" if _amd_gpu_present() else "cpu"
     if nvidia_driver_cuda_version() is not None and (
         _repo().casefold() != DEFAULT_REPO.casefold() or _nvidia_has_prebuilt_arch() is not False
     ):
@@ -922,6 +926,8 @@ def _cuda_runtime_satisfied(record: dict) -> bool:
 
 def _intact_install(target: Path, record: dict) -> Optional[Path]:
     """The server of a complete, unaltered Studio install of ``record``, or None."""
+    if amd_only() and record.get("backend") in ("cuda", "metal"):
+        return None
     if not record or not (target / OWNERSHIP_MARKER).is_file():
         return None
     rel = record.get("server_relpath")
@@ -1273,6 +1279,8 @@ def install(
         raise RuntimeError(
             f"unknown accelerator {accelerator!r}; expected one of {', '.join(ACCELERATORS)}"
         )
+    if amd_only() and accelerator not in ("auto", "cpu", "vulkan"):
+        raise RuntimeError(f"The AMD AppImage cannot install the {accelerator} audio.cpp backend")
     target = (install_dir or default_install_dir()).resolve()
     if target.exists() and not target.is_dir():
         raise RuntimeError(f"audio.cpp install target is not a directory: {target}")

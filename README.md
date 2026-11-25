@@ -158,6 +158,12 @@ Unsloth can be used in three ways: **[Unsloth Desktop](https://unsloth.ai/downlo
 
 For Desktop's local HTTP port, set `UNSLOTH_DESKTOP_PORT=9000` in its launch environment and fully restart the app. Unset or empty uses `8888`. Choose `1024–65515`. If the port is busy, Desktop tries the next 20. It rejects ranges with browser-restricted ports. This covers backend restarts after updates. `unsloth studio -p` and LAN use separate ports.
 
+#### AMD Linux AppImage
+
+Run [Build AMD AppImage](https://github.com/GraderGamer2/Unsloth-Without-Training-Feature/actions/workflows/amd-appimage.yml) in GitHub Actions to build the x86-64 AppImage. The completed run provides `Unsloth-AMD-x86_64.AppImage` and its SHA-256 checksum in the `Unsloth-AMD-AppImage-x86_64` artifact.
+
+This build uses AMD Vulkan or ROCm for GPU inference, with CPU fallback. The llama.cpp backend picker offers Auto, CPU, Vulkan, and ROCm.
+
 #### Linux desktop storage in this fork
 
 Linux desktop builds from this repository store app-managed files in `~/.unsloth`. The Models folder in Settings points to `~/.unsloth/Models`. The download links above point to upstream releases.

@@ -33,12 +33,12 @@ from utils.llama_cpp_changelog import (
 )
 from utils.prebuilt import update_flow as _flow
 from utils.prebuilt.llama_backend import (
-    REQUESTABLE_BACKENDS,
     environment_backend_override,
     marker_backend,
     marker_backend_request,
     normalize_backend,
     normalize_backend_request,
+    requestable_backends,
 )
 from utils.update_status import update_checks_disabled
 
@@ -607,10 +607,11 @@ def _env_backend_override() -> Optional[str]:
 def _backend_options(resolved: Optional[dict], assets: Optional[dict] = None) -> list[dict]:
     """Normalize a resolver payload into the options the picker and the switch planner both read, so both judge a request against the same list."""
     options = []
+    supported = requestable_backends()
     for entry in (resolved or {}).get("backends") or []:
         # Options must be switchable; actual-only backends (metal, sycl) surface as resolved_backend.
         backend = normalize_backend_request(entry.get("backend"))
-        if backend is None:
+        if backend not in supported:
             continue
         asset = entry.get("asset")
         options.append(
@@ -1224,7 +1225,7 @@ def start_update() -> dict:
 def start_backend_switch(backend: str) -> dict:
     """Install the llama.cpp bundle for ``backend`` and record it as the choice. Deliberately the same job, lock and phase machinery as an update: both replace the same tree while the same server is unloaded, which is what makes a switch and an update mutually exclusive instead of two writers racing over one install. Callers poll get_update_status() exactly as for an update."""
     normalized = normalize_backend(backend)
-    if normalized is None or normalized not in REQUESTABLE_BACKENDS:
+    if normalized not in requestable_backends():
         with _job_lock:
             job = dict(_job)
         return {

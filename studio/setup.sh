@@ -1164,6 +1164,7 @@ _setup_cvd_hides_nvidia() {
 
 # Present regardless of mask; falls back to /proc/driver/nvidia/gpus. Mirrors install.sh.
 _setup_has_physical_nvidia_gpu() {
+    [ "${UNSLOTH_AMD_ONLY:-0}" != 1 ] || return 1
     _setup_nv_smi_wedged=""
     _setup_nvsmi=""
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -4456,6 +4457,7 @@ _installed_prebuilt_runs() {
 }
 
 _setup_has_intel_gpu() {
+    [ "${UNSLOTH_AMD_ONLY:-0}" != 1 ] || return 1
     grep -qs -i "^0x8086" /sys/class/drm/card*/device/vendor 2>/dev/null
 }
 
@@ -4489,6 +4491,7 @@ _gpu_prebuilt_to_keep_over_cpu_build() {
 
 # UNSLOTH_LLAMA_KEEP_PREBUILT=1 (Docker build sees no GPU and would install CPU over CUDA).
 _keep_installed_gpu_prebuilt() {
+    [ "${UNSLOTH_AMD_ONLY:-0}" != 1 ] || return 1
     local install_dir=$1 requested_tag=$2 repo=$3 release_pin=${4:-}
     case "$(printf '%s' "${UNSLOTH_LLAMA_KEEP_PREBUILT:-}" | awk '{$1=$1; print tolower($0)}')" in
         1|true|yes|on) ;;
@@ -5191,7 +5194,8 @@ else
                     CMAKE_ARGS="$CMAKE_ARGS -DGPU_TARGETS=${GPU_TARGETS}"
                     _BUILD_DESC="building (ROCm, ${GPU_TARGETS//;/+})"
                 fi
-            elif [ -d /usr/local/cuda ] || _setup_run_smi nvidia-smi &>/dev/null; then
+            elif [ "${UNSLOTH_AMD_ONLY:-0}" != 1 ] && \
+                 { [ -d /usr/local/cuda ] || _setup_run_smi nvidia-smi &>/dev/null; }; then
                 _BUILD_DESC="building (CPU, CUDA driver found but nvcc missing)"
             elif [ -d /opt/rocm ] || command -v rocm-smi &>/dev/null; then
                 _BUILD_DESC="building (CPU, ROCm driver found but hipcc missing)"

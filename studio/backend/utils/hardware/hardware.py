@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 import structlog
 from loggers import get_logger
+from utils.gpu_policy import amd_only
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -312,20 +313,20 @@ def _probe_physical_gpu_inventory() -> Dict[str, Any]:
     # "No devices" and "no probe could answer" are different facts: collapsing them let a transient nvidia-smi timeout read as "the GPU disappeared". PER VENDOR, so an Intel sysfs row cannot answer for a timed-out NVIDIA probe.
     unanswered: set = set()
 
-    try:
-        from . import nvidia
-        result = nvidia.get_physical_gpu_inventory()
-    except Exception as e:
-        logger.debug("NVIDIA physical inventory probe failed: %s", e)
-        unanswered.add("nvidia")
-    else:
-        # An absent nvidia-smi is an answer: the normal state of every AMD, Intel and CPU host.
-        if result.get("error") and not result.get("absent"):
+    if not amd_only():
+        try:
+            from . import nvidia
+            result = nvidia.get_physical_gpu_inventory()
+        except Exception as e:
+            logger.debug("NVIDIA physical inventory probe failed: %s", e)
             unanswered.add("nvidia")
-        nvidia_devices = result.get("devices") or []
-        if nvidia_devices:
-            devices.extend(nvidia_devices)
-            sources.append(result.get("source") or "nvidia-smi")
+        else:
+            if result.get("error") and not result.get("absent"):
+                unanswered.add("nvidia")
+            nvidia_devices = result.get("devices") or []
+            if nvidia_devices:
+                devices.extend(nvidia_devices)
+                sources.append(result.get("source") or "nvidia-smi")
 
     # Windows AMD: amd-smi is opt-in, but the DirectX registry records every adapter's dedicated memory.
     if platform.system() == "Windows":
@@ -388,7 +389,11 @@ def _probe_physical_gpu_inventory() -> Dict[str, Any]:
             sysfs_devices = None
         if sysfs_devices is None:
             sysfs_devices = []
-            unanswered.update(("amd", "intel"))
+            unanswered.add("amd")
+            if not amd_only():
+                unanswered.add("intel")
+        if amd_only():
+            sysfs_devices = [device for device in sysfs_devices if device.get("vendor") == "amd"]
         if sysfs_devices:
             if any(device.get("vendor") == "amd" for device in sysfs_devices):
                 # The installers only ship a ROCm wheel for _ROCM_SUPPORTED_GFX, so an older card left on CPU torch on purpose must not read as broken. Attached to every AMD record, not matched one-to-one: setup.sh says the orderings need not agree.

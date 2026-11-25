@@ -21,6 +21,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+from utils.gpu_policy import amd_only
 from utils.process_lifetime import (
     adopt_pid,
     child_popen_kwargs,
@@ -412,11 +413,20 @@ def _layout_candidates(root: Path, stem: str = _BINARY_STEM) -> list[Path]:
 def _first_file(paths: list[Path]) -> Optional[str]:
     for p in paths:
         try:
-            if p.is_file():
+            if p.is_file() and _supported_build(p):
                 return str(p)
         except OSError:
             continue
     return None
+
+
+def _supported_build(binary: Path) -> bool:
+    if not amd_only():
+        return True
+    from core.inference import sd_cpp_backend
+
+    recorded = sd_cpp_backend._installed_accelerator_of(str(binary))
+    return recorded != "cuda" and not _needs_host_cuda_runtime(str(binary.resolve().parent))
 
 
 # Keyed by file stat, so an in-place replace re-probes while a rebuild elsewhere on PATH is unaffected.
@@ -587,7 +597,7 @@ def _find_binary(
 ) -> Optional[str]:
     """Lookup order: direct env binary, UNSLOTH_SD_CPP_PATH dir, install root, in-tree build, then PATH."""
     env_bin = os.environ.get(direct_env)
-    if env_bin and Path(env_bin).is_file():
+    if env_bin and Path(env_bin).is_file() and _supported_build(Path(env_bin)):
         return env_bin
 
     custom = os.environ.get("UNSLOTH_SD_CPP_PATH")
@@ -618,7 +628,9 @@ def _find_binary(
 
     for stem in path_stems:
         on_path = shutil.which(stem)
-        if on_path and (stem != _LEGACY_STEM or _is_legacy_sd_cpp_binary(on_path)):
+        if on_path and _supported_build(Path(on_path)) and (
+            stem != _LEGACY_STEM or _is_legacy_sd_cpp_binary(on_path)
+        ):
             return on_path
     return None
 

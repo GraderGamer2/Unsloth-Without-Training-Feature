@@ -27,6 +27,7 @@ from core.inference.audio_cpp_models import AudioCppModel
 from core.inference.audio_cpp_failures import classify_audio_cpp_failure
 from core.inference.audio_errors import sanitize_runtime_tail
 from loggers import get_logger
+from utils.gpu_policy import amd_only
 from utils.prebuilt.child_env import isolate_home, scrub_env
 from utils.prebuilt.runtime_libs import dedupe_existing_dirs
 from utils.process_lifetime import (
@@ -305,16 +306,18 @@ def select_backend(binary: str, force_cpu: bool) -> str:
     if force_cpu:
         return "cpu"
     override = (os.environ.get("UNSLOTH_AUDIO_CPP_BACKEND") or "").strip().lower()
-    if override:
+    if override and (not amd_only() or override in ("cpu", "vulkan", "hip")):
         return override
     recorded = str(read_install_record(binary).get("backend") or "").strip().lower()
     if recorded in ("cpu", "cuda", "vulkan", "metal", "hip"):
+        if amd_only() and recorded in ("cuda", "metal"):
+            return "cpu"
         return _reachable(recorded)
     # A custom build with no record: what it was compiled with, preferring the host's GPU.
     built = compiled_backends(binary)
     if sys.platform == "darwin":
         return "metal" if built is None or "metal" in built else "cpu"
-    if shutil.which("nvidia-smi") and (built is None or "cuda" in built):
+    if not amd_only() and shutil.which("nvidia-smi") and (built is None or "cuda" in built):
         return _reachable("cuda")
     if built and "vulkan" in built:
         return "vulkan"

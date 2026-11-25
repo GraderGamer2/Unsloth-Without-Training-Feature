@@ -72,7 +72,9 @@ def cuda_version_for_driver(driver_version: str) -> tuple[int, int] | None:
     return _nvidia_probe.cuda_version_for_driver(driver_version)
 
 
+from backend.utils.gpu_policy import amd_only  # noqa: E402
 from backend.utils.prebuilt.llama_backend import (  # noqa: E402
+    AMD_BACKENDS,
     INSTALL_KIND_BACKENDS,
     REQUESTABLE_BACKENDS,
     backend_for_install_kind,
@@ -82,6 +84,7 @@ from backend.utils.prebuilt.llama_backend import (  # noqa: E402
     marker_backend,
     marker_backend_request,
     normalize_backend_request,
+    requestable_backends,
 )
 from backend.utils.prebuilt.runtime_libs import (
     oneapi_lib_dirs,
@@ -2979,7 +2982,8 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
 
     macos_version = parse_macos_version(platform.mac_ver()[0]) if is_macos else None
 
-    nvidia_smi = shutil.which("nvidia-smi")
+    amd_desktop = amd_only()
+    nvidia_smi = None if amd_desktop else shutil.which("nvidia-smi")
     driver_cuda_version = None
     compute_caps: list[str] = []
     physical_compute_caps: list[str] = []
@@ -3058,7 +3062,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
             pass
 
     # The driver exposes one subdir per GPU here even when nvidia-smi is absent or wedged.
-    if is_linux and not has_physical_nvidia:
+    if is_linux and not amd_desktop and not has_physical_nvidia:
         try:
             proc_gpu_dir = "/proc/driver/nvidia/gpus"
             if os.path.isdir(proc_gpu_dir) and os.listdir(proc_gpu_dir):
@@ -3067,7 +3071,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
         except OSError:
             pass
 
-    if (is_linux or is_windows) and (
+    if not amd_desktop and (is_linux or is_windows) and (
         not has_physical_nvidia or driver_cuda_version is None or not physical_compute_caps
     ):
         inventory = nvidia_library_inventory()
@@ -3210,7 +3214,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
                         _vendor_id = _vf.read().strip().lower()
                 except (OSError, UnicodeDecodeError):
                     continue
-                if _vendor_id == "0x8086":
+                if _vendor_id == "0x8086" and not amd_desktop:
                     has_intel_gpu = True
                 elif _vendor_id == "0x1002" and not _amd_hidden_by_mask:
                     has_amd_gpu_without_rocm = True
@@ -8919,6 +8923,8 @@ def _kept_install_payload_is_healthy(install_dir: Path, host: HostInfo) -> bool:
     """Check the payload shared by install kinds allowed by the tree's marker."""
     marker = load_prebuilt_metadata(install_dir)
     backend = marker_backend(marker)
+    if amd_only() and backend not in (None, *AMD_BACKENDS):
+        return False
     platform_prefix = "windows-" if host.is_windows else "macos-" if host.is_macos else "linux-"
     kinds = sorted(
         kind for kind in install_kinds_for_backend(backend) if kind.startswith(platform_prefix)
@@ -9692,6 +9698,8 @@ def effective_backend_request(
     if explicit is not None:
         return explicit, True
     stored = persisted_backend_request(install_dir)
+    if amd_only() and stored in ("cuda", "sycl"):
+        return "auto", False
     if not is_requestable_backend(stored):
         # Written by a newer Unsloth; detection would silently rewrite it to "auto", so refuse.
         raise UnknownBackendRequest(
@@ -10813,6 +10821,8 @@ def route_backend_request(
     host: HostInfo | None = None,
 ) -> BackendRoute:
     """Apply a backend request to the host profile without fetching releases."""
+    if amd_only() and backend not in (None, *AMD_BACKENDS):
+        raise BackendUnavailable(f"The AMD AppImage cannot install the {backend} backend")
     if host is None:
         detected_host = (
             detect_host(probe_rocm_with_nvidia = True) if backend == "rocm" else detect_host()
@@ -10822,6 +10832,11 @@ def route_backend_request(
         detected_host = detect_host(probe_rocm_with_nvidia = True)
     else:
         detected_host = host
+    if amd_only():
+        detected_host = dataclasses_replace(
+            detected_host, has_physical_nvidia = False, has_usable_nvidia = False,
+            has_intel_gpu = False,
+        )
     if backend == "rocm":
         detected_host = dataclasses_replace(
             detected_host,
@@ -11389,7 +11404,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--llama-backend",
-        choices = (*REQUESTABLE_BACKENDS, "hip"),
+        choices = (*requestable_backends(), "hip"),
         help = (
             "Install the llama.cpp prebuilt for this backend and record the choice, "
             "so later updates keep it instead of re-detecting. cuda and rocm (alias "
@@ -11585,7 +11600,7 @@ def resolve_backends_payload(
 
     entries: list[dict[str, Any]] = []
     with _cached_metadata_fetches():
-        for backend in ("auto",) if host.is_macos else REQUESTABLE_BACKENDS:
+        for backend in ("auto",) if host.is_macos else requestable_backends():
             entry: dict[str, Any] = {"backend": backend}
             try:
                 selection = select_backend_install(
@@ -11754,6 +11769,8 @@ def _linux_cuda_runtime_wheels_to_supply(host: HostInfo) -> tuple[str, ...]:
 
 def ensure_linux_cuda_runtime_before_selection(route: BackendRoute) -> None:
     """Installs the CUDA runtime wheels a chat-only Linux NVIDIA host lacks; never raises."""
+    if amd_only():
+        return
     try:
         if route.backend not in (None, "auto", "cuda"):
             return
@@ -11766,6 +11783,8 @@ def ensure_linux_cuda_runtime_before_selection(route: BackendRoute) -> None:
 
 def ensure_cuda_runtime_wheels(install_dir: Path) -> None:
     """Installs NVIDIA's runtime wheels into this env when the CUDA install has none; never raises."""
+    if amd_only():
+        return
     try:
         wheels = _missing_cuda_runtime_wheels(install_dir)
         if (

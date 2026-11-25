@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from auth import policy
 from auth.authentication import get_current_subject
 from core.inference import engine_install
+from utils.gpu_policy import amd_only
 
 Engine = Literal["vllm", "sglang"]
 router = APIRouter(dependencies = [Depends(get_current_subject)])
@@ -28,7 +29,11 @@ def _reap_crashed_engine() -> None:
 async def list_engines():
     def rows():
         _reap_crashed_engine()
-        return [engine_install.status(name) for name in engine_install.PROFILES]
+        return [
+            engine_install.status(name)
+            for name, profile in engine_install.PROFILES.items()
+            if not amd_only() or "rocm" in profile
+        ]
 
     return await asyncio.to_thread(rows)
 

@@ -117,6 +117,7 @@ from core.inference.sd_cpp_engine import (
 from core.inference.sd_cpp_server import SdCppLatentFormatError, SdCppServer
 from loggers import get_logger
 from utils.gpu_memory_events import invalidates_gpu_memory as _invalidates_gpu_memory
+from utils.gpu_policy import amd_only
 from utils.account_context import account_thread, current_account_id
 from utils.subprocess_compat import (
     windows_hidden_subprocess_kwargs,
@@ -2383,6 +2384,8 @@ def preferred_accelerator(accelerator: Optional[str], card: Optional[str] = None
     global _windows_rocm_skip_logged
     chosen = accelerator or "auto"
     klass = _accelerator_class_of(accelerator) or chosen
+    if amd_only() and klass not in ("auto", "cpu", "rocm", "vulkan"):
+        chosen = klass = "vulkan"
     if klass == "rocm" and windows_rocm_build_skipped():
         if not _windows_rocm_skip_logged:
             _windows_rocm_skip_logged = True
@@ -2889,6 +2892,8 @@ def _skip_unloadable_rocm(accelerator: str) -> str:
 
 def ensure_sd_cpp_binary(*, allow_install: bool = True, accelerator: str = "cpu") -> Optional[str]:
     """Never raises: None means no usable binary and tells the router to fall back to diffusers."""
+    if amd_only() and _accelerator_class_of(accelerator) not in ("auto", "cpu", "rocm", "vulkan"):
+        accelerator = preferred_accelerator(accelerator)
     found = find_sd_cpp_binary()
     usable = bool(found) and _usable_or_discard_managed(found)
     if usable and not _needs_reinstall(found, accelerator):
