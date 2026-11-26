@@ -199,6 +199,10 @@ function toGpuInfo(
   };
   const gpuData =
     source === "inference_gpu" ? (data?.inference_gpu ?? data?.gpu) : data?.gpu;
+  // GGUF inference is independent of the PyTorch/training backend.
+  if (source === "inference_gpu" && gpuData?.backend === "vulkan") {
+    base.backend = "vulkan";
+  }
   const devices = gpuData?.devices ?? [];
   if (!gpuData?.available || !devices.length) {
     return { ...DEFAULT_GPU, ...base, budgetKnown: data !== null };

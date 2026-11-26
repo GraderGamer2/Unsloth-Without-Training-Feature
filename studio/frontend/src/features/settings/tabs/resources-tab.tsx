@@ -961,6 +961,26 @@ export function ResourcesTab() {
         </SettingsRow>
       </SettingsSection>}
 
+      {PERSONAL_VULKAN && (
+        <SettingsSection title={t("settings.resources.gpu.title")}>
+          {systemInfo.inference_gpu?.backend === "vulkan" && systemInfo.inference_gpu.available ? (
+            systemInfo.inference_gpu.devices.map((device) => (
+              <div key={device.index} className="flex flex-col gap-1 py-3">
+                <span className="text-sm font-semibold">{device.name ?? `Vulkan${device.index}`}</span>
+                <span className="text-xs text-muted-foreground">
+                  Vulkan{device.index} · {device.shared_memory ? t("settings.resources.gpu.sharedWithSystemRam") : "Dedicated GPU memory"}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {t("settings.resources.gpu.estimatedAvailable", { value: isFiniteNumber(device.vram_free_gb) ? formatGiB(device.vram_free_gb) : "—" })}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p className="py-3 text-sm text-muted-foreground">No Vulkan device reported by llama.cpp yet. CPU fallback remains available.</p>
+          )}
+          <p className="pb-3 text-xs text-muted-foreground">The bundled Vulkan runtime is fixed. Choose automatic GPU placement, a device, or CPU-only placement in the GGUF model load settings.</p>
+        </SettingsSection>
+      )}
       {!PERSONAL_VULKAN && <SettingsSection title={t("settings.resources.gpu.title")}>
         {driverWarning?.driver_version ? (
           <div className="flex items-start justify-between gap-3 border-b border-border/60 py-3">

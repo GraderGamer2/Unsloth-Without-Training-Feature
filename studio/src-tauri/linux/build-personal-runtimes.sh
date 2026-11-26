@@ -42,7 +42,13 @@ compile() {
     done
     shift
     local source="$work/sources/$component" build="$work/native/$component"
-    local target binary
+    local target binary library
+    local shared=OFF
+    # Studio probes ggml-base and ggml-vulkan directly to discover device ordinals and RAM budgets.
+    # Static llama-server can run Vulkan but is invisible to that probe.
+    if [[ "$component" == llama ]]; then
+        shared=ON
+    fi
     local native_flags="-O3 -march=znver3 -mtune=znver3 -DNDEBUG -ffunction-sections -fdata-sections"
     local ggml="$source/ggml"
     if [[ "$component" == audio ]]; then
@@ -70,7 +76,8 @@ PY
         -DCMAKE_CXX_FLAGS_RELEASE="$native_flags" \
         -DCMAKE_EXE_LINKER_FLAGS="-Wl,--gc-sections -Wl,--as-needed" \
         -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
+        -DBUILD_SHARED_LIBS="$shared" -DBUILD_TESTING=OFF \
+        -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON \
         -DGGML_NATIVE=OFF -DGGML_LTO=ON -DGGML_BACKEND_DL=OFF \
         -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_HIP=OFF \
         -DGGML_METAL=OFF -DGGML_SYCL=OFF -DGGML_OPENCL=OFF "$@"
@@ -81,6 +88,21 @@ PY
         test -x "$binary"
         install -s -m 755 "$binary" "$output/$component/$target"
     done
+    if [[ "$component" == llama ]]; then
+        # Copy the actual shared objects and their SONAME symlinks together, not the static archives.
+        shopt -s nullglob
+        local -a libraries=("$build/bin/"*.so*)
+        ((${#libraries[@]} > 0))
+        cp -a -- "${libraries[@]}" "$output/$component/"
+        for library in "$output/$component/"*.so*; do
+            if [[ -f "$library" && ! -L "$library" ]]; then
+                strip --strip-unneeded "$library"
+            fi
+        done
+        for library in libggml-base.so libggml-vulkan.so libggml-cpu.so; do
+            test -f "$output/$component/$library"
+        done
+    fi
     install -m 644 "$source/LICENSE" "$output/$component/LICENSE"
 }
 

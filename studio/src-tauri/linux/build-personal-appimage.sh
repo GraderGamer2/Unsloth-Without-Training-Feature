@@ -62,6 +62,28 @@ install -m 644 "$appdir/usr/share/doc/unsloth-safe-emoji/copyright" "$stage/Unsl
 install -m 644 "$appdir/usr/etc/fonts/unsloth-appimage.conf" "$stage/unsloth-appimage-fonts.conf"
 "$stage/finalize-complete-appimage.sh" "$appdir"
 
+# Fail packaging if the optimized server no longer exposes the API used by Studio's Vulkan probe.
+# No physical GPU is needed for these ELF/linkage checks.
+llama="$resources/personal-runtimes/llama"
+for lib in libggml-base.so libggml-vulkan.so libggml-cpu.so; do
+    test -f "$llama/$lib"
+done
+symbols=$(nm -D --defined-only "$llama/libggml-vulkan.so")
+for symbol in ggml_backend_vk_get_device_count ggml_backend_vk_get_device_memory ggml_backend_vk_reg; do
+    grep -Eq "[[:space:]]${symbol}$" <<<"$symbols"
+done
+symbols=$(nm -D --defined-only "$llama/libggml-base.so")
+for symbol in ggml_backend_reg_dev_count ggml_backend_reg_dev_get ggml_backend_dev_type ggml_backend_dev_description; do
+    grep -Eq "[[:space:]]${symbol}$" <<<"$symbols"
+done
+for binary in "$llama/llama-server" "$llama/libggml-vulkan.so"; do
+    dependencies=$(ldd "$binary")
+    if grep -Fq "not found" <<<"$dependencies"; then
+        printf "%s\n" "$dependencies" >&2
+        exit 1
+    fi
+done
+
 head -c "$("$seed" --appimage-offset)" "$seed" > "$stage/runtime"
 mkdir -p -- "$(dirname -- "$output")"
 ARCH=x86_64 "$packer" --no-appstream --runtime-file "$stage/runtime" \

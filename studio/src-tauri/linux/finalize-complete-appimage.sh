@@ -63,7 +63,10 @@ while IFS= read -r -d '' object; do
   [[ "$(head -c 4 "$object" 2>/dev/null || true)" == $'\177ELF' ]] || continue
   readelf -d "$object" 2>/dev/null | grep -q 'Dynamic section' || continue
   relative="$(realpath --relative-to="$(dirname -- "$object")" "$libdir")"
-  if [[ "$relative" == "." ]]; then
+  if [[ "$object" == "$appdir/usr/lib/Unsloth/personal-runtimes/"* ]]; then
+    # Keep ggml/llama sibling libraries discoverable without mixing host Vulkan with the GTK bundle.
+    runpath='$ORIGIN'
+  elif [[ "$relative" == "." ]]; then
     runpath='$ORIGIN'
   else
     runpath="\$ORIGIN/$relative"
