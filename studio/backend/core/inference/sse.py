@@ -8,7 +8,7 @@ from __future__ import annotations
 import codecs
 from typing import Any, AsyncIterator
 
-from core.inference.http_stream import SSE_LINE_END
+from core.inference.http_stream import _split_complete_sse_lines
 
 
 class SSELineDecoder:
@@ -38,11 +38,9 @@ class SSELineDecoder:
             if text:
                 self._parts.append(text)
             return []
-        pending = "".join(self._parts) + text
+        pending = "".join(self._parts) + text if self._parts else text
         self._parts.clear()
-        cut = len(pending) - pending.endswith("\r")
-        *lines, rest = SSE_LINE_END.split(pending[:cut])
-        rest += pending[cut:]
+        lines, rest = _split_complete_sse_lines(pending)
         if rest:
             self._parts.append(rest)
         return lines

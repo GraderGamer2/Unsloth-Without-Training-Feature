@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""CPU-only regressions for model metadata and document chunking fast paths."""
+"""CPU-only regressions for model metadata, document chunking and streaming fast paths."""
 from __future__ import annotations
 
 import ast
+import asyncio
 import bisect
 from dataclasses import dataclass
 import math
@@ -174,6 +175,76 @@ class FastPathsTest(unittest.TestCase):
             maximum, overlap = rng.randrange(1, 40), rng.randrange(0, 50)
             self.assertEqual(merge(pieces, starts, maximum, overlap),
                              reference(pieces, starts, maximum, overlap))
+
+    def test_stream_fragmentation_equivalence(self):
+        http = ModuleType("core.inference.http_stream")
+        http.__dict__.update(runpy.run_path(str(BACKEND / "core/inference/http_stream.py")))
+        with patch.dict(sys.modules, {"core.inference.http_stream": http}):
+            decoder = runpy.run_path(str(BACKEND / "core/inference/sse.py"))["SSELineDecoder"]
+
+        class Response:
+            def __init__(self, pieces):
+                self.pieces = pieces
+                self.closed = False
+
+            async def aiter_text(self):
+                try:
+                    for piece in self.pieces:
+                        yield piece
+                finally:
+                    self.closed = True
+
+        def expected(text):
+            if not text:
+                return []
+            lines = re.split(r"\r\n|\r|\n", text)
+            if lines[-1] == "":
+                lines.pop()
+            return lines
+
+        async def check():
+            rng = random.Random(7735)
+            alphabet = ["a", "data: ", "\r", "\n", "\u2028", "\u2029", "\x85", "😺"]
+            for _ in range(1500):
+                text = "".join(rng.choices(alphabet, k=rng.randrange(0, 120)))
+                points = sorted([0, len(text)] + [
+                    rng.randrange(len(text) + 1) for _ in range(30)
+                ])
+                response = Response([text[a:b] for a, b in zip(points, points[1:])])
+                self.assertEqual([line async for line in http.aiter_sse_lines(response)],
+                                 expected(text))
+                self.assertTrue(response.closed)
+
+                # Byte splits can bisect UTF-8, CRLF, or a leading BOM.
+                wire = ("\ufeff" + text).encode("utf-8")
+                points = sorted([0, len(wire)] + [
+                    rng.randrange(len(wire) + 1) for _ in range(30)
+                ])
+                parsed, lines = decoder(), []
+                for a, b in zip(points, points[1:]):
+                    piece = rng.choice([bytes, bytearray, memoryview])(wire[a:b])
+                    lines.extend(parsed.feed(piece))
+                lines.extend(parsed.flush())
+                self.assertEqual(lines, expected(text))
+
+            # Large fragmented JSON/tool-call line, followed by a split CRLF and empty line.
+            pieces = ["data: "] + ["x" * 256] * 4096 + ["\r", "\n", "\r", "\n"]
+            response = Response(pieces)
+            want = ["data: " + "x" * (256 * 4096), ""]
+            self.assertEqual([line async for line in http.aiter_sse_lines(response)], want)
+            parsed, lines = decoder(), []
+            for piece in pieces:
+                lines.extend(parsed.feed(piece))
+            lines.extend(parsed.flush())
+            self.assertEqual(lines, want)
+
+            response = Response(["data: first\n\n", "data: second\n\n"])
+            iterator = http.aiter_sse_lines(response)
+            self.assertEqual(await iterator.__anext__(), "data: first")
+            await iterator.aclose()
+            self.assertTrue(response.closed)
+
+        asyncio.run(check())
 
 
 if __name__ == "__main__":
