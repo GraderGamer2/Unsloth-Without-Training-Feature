@@ -173,7 +173,9 @@ def layout_from_gguf(
             if not shards or not all(os.path.isfile(p) for p in shards):
                 logger.debug("offload layout: split %s is missing a shard", path)
                 return ModelLayout()
-            readers = [_LayoutReader(p) for p in shards]
+            # Reuse the supplied shard without disturbing the metadata-first order.
+            first_reader = readers[0]
+            readers = [first_reader if p == path else _LayoutReader(p) for p in shards]
     except Exception as exc:
         logger.debug("offload layout: cannot read %s (%s)", path, exc)
         return ModelLayout()
@@ -322,10 +324,12 @@ def _layout_from_readers(readers, *, complete: bool = False) -> ModelLayout:
     token_embd = 0
     per_layer_embd = 0
     other_resident = 0
+    tensor_bytes = 0
 
     for tensor in (t for r in readers for t in r.tensors):
         name = str(tensor.name)
         nbytes = int(tensor.n_bytes)
+        tensor_bytes += nbytes
         match = _BLOCK_RE.match(name)
         if match:
             index = int(match.group(1))
@@ -380,7 +384,7 @@ def _layout_from_readers(readers, *, complete: bool = False) -> ModelLayout:
         lm_head_bytes = lm_head,
         token_embd_bytes = token_embd,
         per_layer_embd_bytes = per_layer_embd,
-        tensor_bytes = sum(int(t.n_bytes) for r in readers for t in r.tensors),
+        tensor_bytes = tensor_bytes,
         other_resident_bytes = other_resident,
         kv_bytes_per_token_f16 = kv_per_token,
         recurrent_bytes = recurrent,

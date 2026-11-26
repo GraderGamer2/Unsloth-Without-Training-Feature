@@ -153,14 +153,16 @@ def _merge(
             _flush()
             # Bound carry so carry + piece fits max_tokens, or the embedder overflows.
             carry_budget = min(overlap, max(0, max_tokens - pt))
-            carry, carry_starts, run = [], [], 0
-            for prev, prev_start in zip(reversed(buf), reversed(buf_starts)):
+            # Find the overlap suffix and copy it once, rather than prepending each item.
+            run = 0
+            carry_start = len(buf)
+            while carry_start:
+                prev = buf[carry_start - 1]
                 if run + prev.token_count > carry_budget:
                     break
-                carry.insert(0, prev)
-                carry_starts.insert(0, prev_start)
                 run += prev.token_count
-            buf, buf_starts, buf_tok = carry, carry_starts, run
+                carry_start -= 1
+            buf, buf_starts, buf_tok = buf[carry_start:], buf_starts[carry_start:], run
         buf.append(piece)
         buf_starts.append(start)
         buf_tok += pt

@@ -165,6 +165,11 @@ jobs:
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool"
 
+      - name: Verify backend fast paths before native compilation
+        run: |
+          python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py
+          python3 studio/backend/tests/test_personal_backend_fastpaths.py
+
       - name: Compile pinned Vulkan-only inference runtimes
         run: |
           work="$RUNNER_TEMP/ryzen-work"

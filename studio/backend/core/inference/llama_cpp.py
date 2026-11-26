@@ -12022,8 +12022,10 @@ class LlamaCppBackend:
                 data_end = max(0, os.path.getsize(path) - data_start)
                 ordered = sorted(offsets)
                 for name, offset in unsized:
-                    later = ordered[bisect.bisect_right(ordered, offset) :]
-                    size = max(0, (later[0] if later else data_end) - offset)
+                    # Only the next strictly greater offset is needed, not a copy of the tail.
+                    next_index = bisect.bisect_right(ordered, offset)
+                    next_offset = ordered[next_index] if next_index < len(ordered) else data_end
+                    size = max(0, next_offset - offset)
                     block_match = _BLOCK_RE.match(name)
                     is_expert = bool(block_match and _MOE_EXPERT_RE.match(block_match.group(2)))
                     if is_expert:
