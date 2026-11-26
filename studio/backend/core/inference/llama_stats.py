@@ -254,7 +254,11 @@ def maybe_start_stats_logger(
     logger,
     headers = None,
 ):
-    """Start a stats logger unless UNSLOTH_STUDIO_ENGINE_STATS disables it."""
+    """Start a stats logger unless disabled or in the personal inference build."""
+    from utils.gpu_policy import personal_vulkan
+
+    if personal_vulkan():
+        return None
     if (os.environ.get("UNSLOTH_STUDIO_ENGINE_STATS", "1") or "").strip().lower() in _OFF:
         return None
     interval = _env_float("UNSLOTH_STUDIO_ENGINE_STATS_INTERVAL_S", 10.0, logger)

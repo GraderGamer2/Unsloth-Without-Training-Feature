@@ -111,6 +111,8 @@ for component in "${components[@]}"; do
         llama)
             checkout_source llama llama.cpp 5c5347de57213dca9f40a1ea3ad11c6072d1b548
             compile llama llama-server -- -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON \
+                -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON \
+                -DGGML_BMI2=ON -DGGML_OPENMP=ON -DGGML_CPU_REPACK=ON \
                 -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
                 -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_TESTS=OFF \
                 -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_CURL=OFF

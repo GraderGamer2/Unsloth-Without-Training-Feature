@@ -165,6 +165,12 @@ jobs:
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool"
 
+      - name: Check personal APU memory admission
+        run: |
+          python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/personal_memory.py studio/backend/core/inference/llama_stats.py
+          python3 studio/backend/tests/test_personal_memory.py
+          bash -n studio/src-tauri/linux/build-personal-runtimes.sh
+
       - name: Compile pinned Vulkan-only inference runtimes
         run: |
           work="$RUNNER_TEMP/ryzen-work"

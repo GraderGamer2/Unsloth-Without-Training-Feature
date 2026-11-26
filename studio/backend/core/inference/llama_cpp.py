@@ -25616,6 +25616,63 @@ class LlamaCppBackend:
             logger.warning(f"Could not open llama-server log file: {e}")
             self._llama_log_path = None
 
+    def _personal_hybrid_memory_guard(self, argv, env) -> None:
+        """Refuse unsafe CPU/hybrid launches before starting the native child."""
+        if not personal_vulkan():
+            return
+        try:
+            ngl = parse_gpu_layers_override(argv)
+        except ValueError:
+            ngl = None
+        cpu = self._child_runs_on_cpu(argv[0], argv, env) or ngl == 0
+        # Preserve the known-good auto/full Vulkan path. A fixed positive split,
+        # CPU-only replay, or explicit CPU tensor placement must fit host RAM.
+        partial = ngl is not None and ngl >= 0 and not self._launch_forces_full_offload(argv, env)
+        cpu_tensors = _args_place_tensors_on_cpu(argv) or _env_places_tensors_on_cpu(env)
+        if not (cpu or partial or cpu_tensors):
+            return
+        from core.inference.personal_memory import hybrid_memory_shortfall
+
+        try:
+            model = _extra_args_device(argv, self._ARGV_MODEL)
+            weights = self._gguf_read_bytes(model)
+            projector = _extra_args_device(argv, {"--mmproj"}) or env.get("LLAMA_ARG_MMPROJ")
+            if projector:
+                weights += os.stat(projector).st_size
+            draft, remote = _extra_args_mtp_draft_source(argv, env)
+            if remote:
+                raise ValueError("remote draft model has no verified local size")
+            if draft:
+                weights += self._gguf_read_bytes(draft)
+            adapters = _sidecar_adapter_bytes(argv)
+            if adapters is None:
+                raise ValueError("unknown adapter size")
+            weights += adapters
+            context = int(_extra_args_device(argv, {"-c", "--ctx-size"}) or env.get("LLAMA_ARG_CTX_SIZE") or 0)
+            context = context if context > 0 else self._context_length
+            if not context or context <= 0:
+                raise ValueError("unknown context length")
+            slots = max(1, _extra_args_n_parallel(argv, env) or 1)
+            ubatch = int(_extra_args_device(argv, {"-ub", "--ubatch-size"}) or env.get("LLAMA_ARG_UBATCH") or self._DEFAULT_N_UBATCH)
+            checkpoints = int(_extra_args_device(argv, {"--ctx-checkpoints"}) or 0)
+            # Price f16 rather than assuming a lower quantized cache, and
+            # non-flash padding rather than depending on GPU attention support.
+            kv = self._estimate_kv_cache_bytes(
+                context, "f16", n_parallel = slots, kv_unified = False,
+                n_ubatch = max(1, ubatch), ctx_checkpoints = max(0, checkpoints),
+                swa_full = True, flash_attn = False,
+            )
+            if not self._can_estimate_kv():
+                raise ValueError("unknown KV cache geometry")
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError) as exc:
+            raise GpuMemoryShortError(
+                f"CPU/hybrid load blocked: memory requirements could not be verified ({exc}).",
+                host = True,
+            ) from exc
+        message = hybrid_memory_shortfall(self._available_system_memory_mib(), weights, kv)
+        if message:
+            raise GpuMemoryShortError(message, host = True)
+
     def _start_llama_process(
         self, cmd: list[str], env: dict, *, child_gpu_physical_ids: Optional[tuple[int, ...]]
     ) -> bool:
@@ -25633,6 +25690,7 @@ class LlamaCppBackend:
         logger.info(f"Starting llama-server: {' '.join(self._redacted_cmd_for_log(cmd))}")
 
         # The mmproj text-only retry reaches a spawn without passing _spawn_and_wait.
+        self._personal_hybrid_memory_guard(cmd, env)
         with self._spawn_lock:
             if self._spawn_is_stale():
                 logger.info("app is shutting down; not starting llama-server")
@@ -34063,6 +34121,8 @@ class LlamaCppBackend:
                             run_cmd,
                             supports_cache_ram = bool(server_caps.get("supports_cache_ram")),
                         )
+                        # Check the final argv on every attempt, including CPU fallback.
+                        self._personal_hybrid_memory_guard(run_cmd, env)
                         # Check and publish under one lock, across Popen only, never the wait.
                         with self._spawn_lock:
                             if self._spawn_is_stale():
