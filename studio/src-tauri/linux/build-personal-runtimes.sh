@@ -110,6 +110,7 @@ for component in "${components[@]}"; do
     case "$component" in
         llama)
             checkout_source llama llama.cpp 5c5347de57213dca9f40a1ea3ad11c6072d1b548
+            python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-llama-vulkan.py" "$work/sources/llama"
             compile llama llama-server -- -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON \
                 -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
                 -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_TESTS=OFF \
