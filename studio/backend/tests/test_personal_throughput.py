@@ -4,10 +4,69 @@ import json
 import random
 import re
 import unittest
+from typing import Any
 from test_personal_backend_fastpaths import source_defs
 
 
 class ThroughputTests(unittest.TestCase):
+    def test_research_selection_and_relative_json_errors(self):
+        def validate(obj, *_args):
+            if obj.get("ok"):
+                return obj
+            raise ValueError("invalid object")
+
+        ns = source_defs("core/research/parsing.py",
+                         {"_parse_and_validate_action", "_parse_and_validate_plan"},
+                         globals_=dict(Any=Any, json=json, re=re,
+                                       _validate_agent_action=validate, _validate_plan=validate))
+
+        def reference(response, reasoning):
+            decoder = json.JSONDecoder()
+            last_error = None
+            for candidate in (response, reasoning):
+                valid = []
+                for match in re.finditer(r"\{", candidate):
+                    try:
+                        value, _ = decoder.raw_decode(candidate[match.start():])
+                        if isinstance(value, dict):
+                            valid.append(validate(value))
+                    except ValueError as exc:
+                        last_error = exc
+                if valid:
+                    return valid[-1]
+            if last_error is not None:
+                raise last_error
+            raise ValueError("no object")
+
+        def outcome(fn, a, b):
+            try:
+                return ("value", fn(a, b))
+            except json.JSONDecodeError as exc:
+                return ("json", exc.msg, exc.doc, exc.pos, exc.lineno, exc.colno)
+            except ValueError as exc:
+                # The empty-output errors intentionally differ by API.
+                return ("invalid", str(exc) if str(exc) == "invalid object" else "no object")
+
+        rng = random.Random(7735)
+        pieces = ["prose", "\n", "é", "{", '{"ok":true}', '{"ok":false}',
+                  '{"ok":true,"value":{"a":2}}', '{"a":', '{"bad":"', "}", "[]"]
+        for _ in range(5000):
+            a, b = ("".join(rng.choices(pieces, k=rng.randrange(12))) for _ in range(2))
+            expected = outcome(reference, a, b)
+            self.assertEqual(outcome(lambda x, y: ns["_parse_and_validate_action"](x, y, set()), a, b),
+                             expected)
+            self.assertEqual(outcome(lambda x, y: ns["_parse_and_validate_plan"](x, y, 8), a, b),
+                             expected)
+
+        # CPython may reject very long numeric literals with ValueError, not
+        # JSONDecodeError; ensure those still follow the original recovery loop.
+        a = '{"ok":true,"n":' + "1" * 5000 + '}'
+        expected = outcome(reference, a, "")
+        self.assertEqual(outcome(lambda x, y: ns["_parse_and_validate_action"](x, y, set()), a, ""),
+                         expected)
+        self.assertEqual(outcome(lambda x, y: ns["_parse_and_validate_plan"](x, y, 8), a, ""),
+                         expected)
+
     def test_credential_prefix_scan(self):
         prefixes = ("sk-unsloth-", "desktop-")
         terms = frozenset(" \t\r\n\"',;)]}" + chr(96))

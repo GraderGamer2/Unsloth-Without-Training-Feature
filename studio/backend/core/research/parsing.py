@@ -179,21 +179,33 @@ def _parse_and_validate_action(
     website_policy: dict | None = None,
 ) -> dict[str, Any]:
     last_error: Exception | None = None
+    last_decode_start: int | None = None
     decoder = json.JSONDecoder()
     for candidate in (response, reasoning):
-        valid_actions = []
+        last_valid_action = None
         for match in re.finditer(r"\{", candidate):
             try:
-                value, _end = decoder.raw_decode(candidate[match.start() :])
-                if isinstance(value, dict):
-                    valid_actions.append(
-                        _validate_agent_action(value, allowed_urls, website_policy)
-                    )
-            except (ValueError, json.JSONDecodeError) as exc:
+                value, _end = decoder.raw_decode(candidate, match.start())
+            except ValueError as exc:
+                # Delay recreating the relative JSON error until it is returned.
+                # Preserve other decoder ValueErrors, e.g. oversized integers.
                 last_error = exc
-        if valid_actions:
-            return valid_actions[-1]
+                last_decode_start = match.start() if isinstance(exc, json.JSONDecodeError) else None
+                continue
+            try:
+                if isinstance(value, dict):
+                    last_valid_action = _validate_agent_action(value, allowed_urls, website_policy)
+            except ValueError as exc:
+                last_error = exc
+                last_decode_start = None
+        if last_valid_action is not None:
+            return last_valid_action
     if last_error is not None:
+        if isinstance(last_error, json.JSONDecodeError) and last_decode_start is not None:
+            raise json.JSONDecodeError(
+                last_error.msg, last_error.doc[last_decode_start:],
+                last_error.pos - last_decode_start,
+            ) from None
         raise last_error
     raise ValueError("Research agent did not return a JSON action")
 
@@ -234,21 +246,35 @@ def _validate_plan(value: dict, max_steps: int) -> dict:
 
 def _parse_and_validate_plan(response: str, reasoning: str, max_steps: int) -> dict:
     last_error: Exception | None = None
+    last_decode_start: int | None = None
     for candidate in (response, reasoning):
         if not candidate.strip():
             continue
-        valid_plans: list[dict] = []
+        last_valid_plan = None
         decoder = json.JSONDecoder()
         for match in re.finditer(r"\{", candidate):
             try:
-                value, _end = decoder.raw_decode(candidate[match.start() :])
-                if isinstance(value, dict):
-                    valid_plans.append(_validate_plan(value, max_steps))
-            except (ValueError, json.JSONDecodeError) as exc:
+                value, _end = decoder.raw_decode(candidate, match.start())
+            except ValueError as exc:
+                # Delay recreating the relative JSON error until it is returned.
+                # Preserve other decoder ValueErrors, e.g. oversized integers.
                 last_error = exc
-        if valid_plans:
-            return valid_plans[-1]
+                last_decode_start = match.start() if isinstance(exc, json.JSONDecodeError) else None
+                continue
+            try:
+                if isinstance(value, dict):
+                    last_valid_plan = _validate_plan(value, max_steps)
+            except ValueError as exc:
+                last_error = exc
+                last_decode_start = None
+        if last_valid_plan is not None:
+            return last_valid_plan
     if last_error is not None:
+        if isinstance(last_error, json.JSONDecodeError) and last_decode_start is not None:
+            raise json.JSONDecodeError(
+                last_error.msg, last_error.doc[last_decode_start:],
+                last_error.pos - last_decode_start,
+            ) from None
         raise last_error
     raise ValueError("Planner did not return a JSON object")
 

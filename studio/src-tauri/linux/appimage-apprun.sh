@@ -16,6 +16,9 @@ export APPDIR PATH
 # host coredump configuration, GPU drivers or kernel settings.
 if [ -d "$APPDIR/usr/lib/Unsloth/personal-runtimes" ]; then
   ulimit -c 0 || true
+  # Scope supported telemetry opt-outs and file-log suppression to this application.
+  export HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
+  export UNSLOTH_STUDIO_NO_FILE_LOG=1
 fi
 
 # Host mode runs a copy of the executable whose $ORIGIN/../lib RUNPATH reaches nothing, so the

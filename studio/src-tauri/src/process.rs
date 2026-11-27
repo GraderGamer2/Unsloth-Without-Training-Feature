@@ -10,7 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
-const MAX_LOG_LINES: usize = 1000;
+// Retain only the last 20 lines needed for an actionable startup error in the
+// personal build. Startup/progress events still travel to the frontend.
+const MAX_LOG_LINES: usize = if cfg!(all(target_os = "linux", feature = "personal-vulkan")) {
+    20
+} else {
+    1000
+};
 
 // Where the AppRun parks the host LD_LIBRARY_PATH it must keep away from the bundle.
 #[cfg(target_os = "linux")]
@@ -3917,7 +3923,8 @@ fn read_output_stream<R: std::io::Read>(
     start_deadline: std::time::Instant,
 ) {
     let mut reader = std::io::BufReader::new(stream);
-    let port_re = Regex::new(r"TAURI_PORT=(\d+)").unwrap();
+    static PORT_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let port_re = PORT_RE.get_or_init(|| Regex::new(r"TAURI_PORT=(\d+)").unwrap());
     let mut buf = Vec::new();
     let mut saw_eof = false;
 
@@ -3930,22 +3937,22 @@ fn read_output_stream<R: std::io::Read>(
             }
             Ok(_) => {
                 let raw = String::from_utf8_lossy(trim_line_endings(&buf));
-                let text = collapse_progress_frames(&raw).to_owned();
+                let text = collapse_progress_frames(&raw);
                 let log_line = if is_stderr {
                     format!("[stderr] {}", text)
                 } else {
-                    text.clone()
+                    text.to_owned()
                 };
 
                 diagnostics::append_phase_line(
                     &backend_log.handle,
                     if is_stderr { "stderr" } else { "stdout" },
-                    &text,
+                    text,
                 );
 
-                let detected_port = if !is_stderr {
+                let detected_port = if !is_stderr && text.contains("TAURI_PORT=") {
                     port_re
-                        .captures(&text)
+                        .captures(text)
                         .and_then(|caps| caps.get(1))
                         .and_then(|port_str| port_str.as_str().parse::<u16>().ok())
                 } else {
@@ -3993,16 +4000,18 @@ fn read_output_stream<R: std::io::Read>(
                     });
                 }
 
-                if is_backend_access_log_line(&text) {
-                    debug!("[backend] {}", log_line);
-                } else if log_line.len() > MAX_BACKEND_LOG_LINE_BYTES {
-                    let mut end = MAX_BACKEND_LOG_LINE_BYTES;
-                    while end > 0 && !log_line.is_char_boundary(end) {
-                        end -= 1;
+                if !cfg!(all(target_os = "linux", feature = "personal-vulkan")) {
+                    if is_backend_access_log_line(text) {
+                        debug!("[backend] {}", log_line);
+                    } else if log_line.len() > MAX_BACKEND_LOG_LINE_BYTES {
+                        let mut end = MAX_BACKEND_LOG_LINE_BYTES;
+                        while end > 0 && !log_line.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        info!("[backend] {} [line truncated]", &log_line[..end]);
+                    } else {
+                        info!("[backend] {}", log_line);
                     }
-                    info!("[backend] {} [line truncated]", &log_line[..end]);
-                } else {
-                    info!("[backend] {}", log_line);
                 }
 
                 let _ = app.emit("server-log", &log_line);

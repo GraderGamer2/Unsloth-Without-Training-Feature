@@ -56,6 +56,60 @@ COMMON = [
     "                if (gl_NumSubgroups == 1) {\n                    // Vote covers the workgroup; retain the publication barrier.\n                    max_mask = max(max_mask, all_less ? NEG_FLT_MAX_OVER_2 : 0.0f);\n                    barrier();\n                } else {\n                    if (gl_SubgroupInvocationID == 0) {\n                        tmpsh[gl_SubgroupID] = all_less ? NEG_FLT_MAX_OVER_2 : 0.0f;\n                    }\n                    barrier();\n                    [[unroll]] for (uint s = 0; s < gl_NumSubgroups; ++s) {\n                        max_mask = max(max_mask, tmpsh[s]);\n                    }\n                }"
   ]
 ]
+COMMON += [
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_s.comp",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n    // This activation slice is invariant across output rows.\n    // Single-column decode only, to bound additional register pressure.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[4];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 4; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_s.comp",
+    "                vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                vec4 b4 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);",
+    "                const vec4 b0 = reuse_b ? cached_b[2*l] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = reuse_b ? cached_b[2*l + 1] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_xs.comp",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n    // This activation slice is invariant across output rows.\n    // Single-column decode only, to bound additional register pressure.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[4];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 4; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_xs.comp",
+    "                const vec4 b0 = vec4(data_b_v4[b_idx + 0]);\n                const vec4 b4 = vec4(data_b_v4[b_idx + 1]);",
+    "                const vec4 b0 = reuse_b ? cached_b[2*l] : vec4(data_b_v4[b_idx + 0]);\n                const vec4 b4 = reuse_b ? cached_b[2*l + 1] : vec4(data_b_v4[b_idx + 1]);"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_xxs.comp",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n    // This activation slice is invariant across output rows.\n    // Single-column decode only, to bound additional register pressure.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[4];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 4; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq2_xxs.comp",
+    "                const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);",
+    "                const vec4 b0 = reuse_b ? cached_b[2*l] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = reuse_b ? cached_b[2*l + 1] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq3_xxs.comp",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n",
+    "    const uint y_idx = i * QUANT_K + 16 * itid;\n    // This activation slice is invariant across output rows.\n    // Single-column decode only, to bound additional register pressure.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[4];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 4; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq3_xxs.comp",
+    "                const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);",
+    "                const vec4 b0 = reuse_b ? cached_b[2*l] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = reuse_b ? cached_b[2*l + 1] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);"
+  ]
+]
+TERNARY = [
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_tq2_0.comp",
+    "    const uint y_idx = i * QUANT_K + y_offset;\n",
+    "    const uint y_idx = i * QUANT_K + y_offset;\n    // Guard inactive tail lanes exactly as the original weight and B reads do.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec2 cached_b[8];\n    if (reuse_b && i < num_blocks_per_row) {\n        const uint base_b = (b_offset + y_idx) / 2;\n        [[unroll]] for (uint k = 0; k < 8; ++k) {\n            cached_b[k] = vec2(data_b_v2[base_b + 8*k]);\n        }\n    }\n"
+  ],
+  [
+    "src/ggml-vulkan/vulkan-shaders/mul_mat_vec_tq2_0.comp",
+    "            vec2 b0 =   vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  0]);\n            vec2 b16 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  8]);\n            vec2 b32 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 16]);\n            vec2 b48 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 24]);\n            vec2 b64 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 32]);\n            vec2 b80 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 40]);\n            vec2 b96 =  vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 48]);\n            vec2 b112 = vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 56]);",
+    "            const vec2 b0 = reuse_b ? cached_b[0] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  0]);\n            const vec2 b16 = reuse_b ? cached_b[1] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  8]);\n            const vec2 b32 = reuse_b ? cached_b[2] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 16]);\n            const vec2 b48 = reuse_b ? cached_b[3] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 24]);\n            const vec2 b64 = reuse_b ? cached_b[4] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 32]);\n            const vec2 b80 = reuse_b ? cached_b[5] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 40]);\n            const vec2 b96 = reuse_b ? cached_b[6] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 48]);\n            const vec2 b112 = reuse_b ? cached_b[7] : vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 56]);"
+  ]
+]
 LLAMA = [
   [
     "src/llama-kv-cache.cpp",
@@ -138,7 +192,7 @@ def patch_specs(component):
     if component not in ("llama", "diffusion", "whisper", "audio"):
         raise ValueError(component)
     root = "external/ggml/" if component == "audio" else "ggml/"
-    return [(root + p, a, b) for p, a, b in COMMON] + (LLAMA if component == "llama" else [])
+    return [(root + p, a, b) for p, a, b in COMMON + (TERNARY if component in ("llama", "diffusion") else [])] + (LLAMA if component == "llama" else [])
 
 def apply(component, source):
     originals, changes = {}, {}

@@ -28,6 +28,23 @@ class RuntimePatchTests(unittest.TestCase):
                     patch["apply"](component, root)
                     self.assertEqual(after, {p: (root / p).read_bytes() for p in originals})
 
+    def test_whisper_padding_worker_bounds(self):
+        # The spectrogram frame count retains the full logical padding.
+        # The worker sees only the input and leading reflection.
+        frame_size, step = 400, 160
+        leading, silence = 200, 480000
+        for samples in (201, 399, 400, 401, 1600, 16001, 480000, 480001):
+            physical = samples + leading
+            old_size = samples + silence + leading * 2
+            logical_size = physical + silence + leading
+            self.assertEqual(old_size, logical_size)
+            frames = (logical_size - frame_size) // step
+            for i in range(min(physical // step + 1, frames)):
+                offset = i * step
+                copied = min(frame_size, physical - offset)
+                self.assertGreaterEqual(copied, 0)
+                self.assertLessEqual(offset + copied, physical)
+
     def test_anchor_failure_leaves_all_files_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

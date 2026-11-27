@@ -56,7 +56,6 @@ compile() {
     fi
     python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-runtime.py" "$component" "$source"
     python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-throughput.py" "$component" "$source"
-    python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-throughput.py" "$component" "$source"
     # These optional shaders require NVIDIA Vulkan extensions that Rembrandt cannot use.
     python3 - "$ggml/src/ggml-vulkan/CMakeLists.txt" <<'PY'
 import re
@@ -115,8 +114,6 @@ for component in "${components[@]}"; do
     case "$component" in
         llama)
             checkout_source llama llama.cpp 5c5347de57213dca9f40a1ea3ad11c6072d1b548
-            python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-llama-vulkan.py" "$work/sources/llama"
-            # Re-applying must be a no-op on the pinned, fully patched tree.
             python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-llama-vulkan.py" "$work/sources/llama"
             compile llama llama-server -- -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON \
                 -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \

@@ -4,6 +4,8 @@ name: Build Ryzen Vulkan AppImage
 on:
   push:
     branches: [ryzen-7735hs-vulkan]
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
@@ -42,6 +44,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
 
@@ -49,19 +52,51 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Fingerprint portable seed inputs
+        id: seed-key
+        run: |
+          digest=$( { git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$'; dpkg-query -W; node --version; npm --version; rustc -vV; cargo --version; python3 --version; printf '%s\n' "${ImageOS:-}" "${ImageVersion:-}"; } | sha256sum | cut -d' ' -f1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact portable seed
+        id: seed-cache
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/amd-appimage
+          key: ryzen-seed-v1-${{ steps.seed-key.outputs.digest }}
+
+      - name: Validate restored seed
+        id: seed-verify
+        run: |
+          dir="$RUNNER_TEMP/amd-appimage"
+          valid=false
+          if [[ -f "$dir/SHA256SUMS" && -f "$dir/Unsloth-AMD-x86_64.AppImage" ]] &&
+             (cd "$dir" && sha256sum --strict -c SHA256SUMS) &&
+             studio/src-tauri/linux/verify-complete-appimage.sh "$dir/Unsloth-AMD-x86_64.AppImage"; then
+            valid=true
+          else
+            rm -rf "$dir"
+          fi
+          echo "valid=$valid" >> "$GITHUB_OUTPUT"
+
       - name: Install the backend wheel build frontend
+        if: steps.seed-verify.outputs.valid != 'true'
         run: python3 -m pip install --disable-pip-version-check pip==26.3
 
       - name: Install locked frontend and Tauri dependencies
+        if: steps.seed-verify.outputs.valid != 'true'
         run: |
           python3 scripts/lockfile_supply_chain_audit.py
           npm ci --prefix studio --no-fund --no-audit
           npm ci --prefix studio/frontend --strict-allow-scripts --no-fund --no-audit
 
       - name: Prepare the pinned AppImage toolchain
+        if: steps.seed-verify.outputs.valid != 'true'
         run: studio/src-tauri/linux/prepare-complete-appimage-tools.sh "$RUNNER_TEMP/tauri-tools-cache/tauri"
 
       - name: Build and verify the AppImage
+        if: steps.seed-verify.outputs.valid != 'true'
         env:
           XDG_CACHE_HOME: ${{ runner.temp }}/tauri-tools-cache
         run: |
@@ -80,6 +115,21 @@ jobs:
           cd "$output"
           sha256sum Unsloth-AMD-x86_64.AppImage > SHA256SUMS
 
+      - name: Check seed cache budget
+        id: seed-size
+        run: |
+          bytes=$(du -sb "$RUNNER_TEMP/amd-appimage" | cut -f1)
+          echo "Portable seed: $bytes bytes"
+          if (( bytes <= 536870912 )); then echo 'save=true' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save verified seed
+        if: steps.seed-cache.outputs.cache-hit != 'true' && steps.seed-size.outputs.save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/amd-appimage
+          key: ryzen-seed-v1-${{ steps.seed-key.outputs.digest }}
+
       - name: Pass verified seed to the Ryzen build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -89,13 +139,17 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  ryzen:
-    name: Compile and package Ryzen 7735HS Vulkan build
-    needs: seed
+  native:
+    name: Compile Vulkan runtime (${{ matrix.component }})
+    if: github.ref == 'refs/heads/ryzen-7735hs-vulkan'
     runs-on: ubuntu-latest
     container:
       image: debian:13
-    timeout-minutes: 300
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [llama, diffusion, whisper, audio]
     defaults:
       run:
         shell: bash
@@ -122,7 +176,139 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libvulkan-dev glslc glslang-tools spirv-headers \
             spirv-tools libshaderc-dev patchelf desktop-file-utils squashfs-tools \
-            fontconfig xdg-utils file unzip
+            fontconfig xdg-utils file unzip ccache zstd
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fingerprint runtime and toolchain
+        id: native-key
+        env:
+          COMPONENT: ${{ matrix.component }}
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: python3 studio/src-tauri/linux/personal-build-cache-key.py "$COMPONENT" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact runtime archive
+        id: native-cache
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/runtime-cache
+          key: ryzen-runtime-v1-${{ matrix.component }}-${{ steps.native-key.outputs.runtime }}
+
+      - name: Validate restored runtime
+        id: native-verify
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          valid=false
+          if bash studio/src-tauri/linux/personal-runtime-archive.sh verify "$COMPONENT" "$RUNNER_TEMP/runtime-cache"; then
+            valid=true
+          else
+            rm -rf "$RUNNER_TEMP/runtime-cache"
+          fi
+          echo "valid=$valid" >> "$GITHUB_OUTPUT"
+
+      - name: Restore bounded C/C++ object cache
+        if: steps.native-verify.outputs.valid != 'true'
+        id: objects
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ryzen-objects-v1-${{ matrix.component }}-${{ steps.native-key.outputs.toolchain }}-${{ steps.native-key.outputs.runtime }}
+          restore-keys: |
+            ryzen-objects-v1-${{ matrix.component }}-${{ steps.native-key.outputs.toolchain }}-
+
+      - name: Build and validate runtime on cache miss
+        if: steps.native-verify.outputs.valid != 'true'
+        env:
+          COMPONENT: ${{ matrix.component }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+          CCACHE_MAXSIZE: 384M
+          CCACHE_COMPILERCHECK: content
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: |
+          work="$RUNNER_TEMP/ryzen-work"
+          ccache --zero-stats
+          bash studio/src-tauri/linux/build-personal-runtimes.sh "$work" "$work/runtimes" "$COMPONENT"
+          ccache --cleanup
+          ccache --show-stats
+          bash studio/src-tauri/linux/personal-runtime-archive.sh pack "$COMPONENT" "$RUNNER_TEMP/runtime-cache" "$work/runtimes"
+
+      - name: Check cache budgets
+        id: native-size
+        run: |
+          for item in runtime-cache ccache; do
+            [[ -d "$RUNNER_TEMP/$item" ]] || continue
+            bytes=$(du -sb "$RUNNER_TEMP/$item" | cut -f1)
+            echo "$item: $bytes bytes"
+            if (( bytes <= 536870912 )); then echo "$item=true" >> "$GITHUB_OUTPUT"; fi
+          done
+
+      - name: Save exact runtime archive
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.native-size.outputs['runtime-cache'] == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/runtime-cache
+          key: ryzen-runtime-v1-${{ matrix.component }}-${{ steps.native-key.outputs.runtime }}
+
+      - name: Save bounded C/C++ object cache
+        if: steps.native-verify.outputs.valid != 'true' && steps.objects.outputs.cache-hit != 'true' && steps.native-size.outputs.ccache == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ryzen-objects-v1-${{ matrix.component }}-${{ steps.native-key.outputs.toolchain }}-${{ steps.native-key.outputs.runtime }}
+
+      - name: Transfer verified runtime to packaging
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ryzen-runtime-${{ matrix.component }}
+          path: ${{ runner.temp }}/runtime-cache/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  desktop:
+    name: Compile Zen 3 desktop and inference-only backend
+    if: github.ref == 'refs/heads/ryzen-7735hs-vulkan'
+    runs-on: ubuntu-latest
+    container:
+      image: debian:13
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      DEBIAN_FRONTEND: noninteractive
+      UNSLOTH_BUILD_JOBS: '2'
+      UNSLOTH_PERSONAL_VULKAN: '1'
+      VITE_UNSLOTH_PERSONAL_VULKAN: '1'
+      CARGO_PROFILE_RELEASE_LTO: fat
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: '3'
+      CARGO_BUILD_JOBS: '2'
+      RUSTFLAGS: -C target-cpu=znver3
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - name: Install Debian 13 build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config cmake ninja-build \
+            python3 python3-venv python3-dev libssl-dev libcurl4-openssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libvulkan-dev glslc glslang-tools spirv-headers \
+            spirv-tools libshaderc-dev patchelf desktop-file-utils squashfs-tools \
+            fontconfig xdg-utils file unzip zstd
           rm -rf /var/lib/apt/lists/*
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -132,10 +318,62 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           targets: x86_64-unknown-linux-gnu
+
+      - name: Fingerprint desktop toolchain and dependencies
+        id: deps-key
+        run: |
+          set -euo pipefail
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          echo "cargo_home=$cargo_home" >> "$GITHUB_OUTPUT"
+          echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/npm-cache" >> "$GITHUB_ENV"
+          echo "PIP_CACHE_DIR=$RUNNER_TEMP/pip-cache" >> "$GITHUB_ENV"
+          digest=$( { dpkg-query -W; rustc -vV; cargo --version; gcc --version; ld --version; node --version; npm --version; python3 --version; printf '%s\n' "$RUSTFLAGS" "$CARGO_PROFILE_RELEASE_LTO" "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" "$CARGO_PROFILE_RELEASE_OPT_LEVEL" "$CARGO_PROFILE_RELEASE_STRIP"; } | sha256sum | cut -d' ' -f1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          source_digest=$(git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$' | sha256sum | cut -d' ' -f1)
+          echo "source=$source_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore npm package downloads
+        id: deps-npm
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/npm-cache
+          key: ryzen-npm-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('studio/package-lock.json', 'studio/frontend/package-lock.json') }}
+          restore-keys: ryzen-npm-v1-${{ steps.deps-key.outputs.digest }}-
+
+      - name: Restore pip build downloads
+        id: deps-pip
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/pip-cache
+          key: ryzen-pip-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('pyproject.toml', 'studio/src-tauri/linux/build-backend-wheel.sh') }}
+          restore-keys: ryzen-pip-v1-${{ steps.deps-key.outputs.digest }}-
+
+      - name: Restore Cargo package downloads
+        id: deps-cargo
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ${{ steps.deps-key.outputs.cargo_home }}/registry/cache
+            ${{ steps.deps-key.outputs.cargo_home }}/registry/index
+            ${{ steps.deps-key.outputs.cargo_home }}/git/db
+          key: ryzen-cargo-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('studio/src-tauri/Cargo.lock') }}
+          restore-keys: ryzen-cargo-v1-${{ steps.deps-key.outputs.digest }}-
+
+      - name: Restore Cargo compiler artifacts (exact key only)
+        id: deps-target
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/ryzen-work/tauri-target
+          key: ryzen-cargo-target-v1-${{ steps.deps-key.outputs.digest }}-${{ steps.deps-key.outputs.source }}
 
       - name: Prepare backend wheel build environment
         run: |
@@ -149,22 +387,6 @@ jobs:
           npm ci --prefix studio --no-fund --no-audit
           npm ci --prefix studio/frontend --strict-allow-scripts --no-fund --no-audit
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: ryzen-build-seed
-          path: ${{ runner.temp }}/ryzen-seed
-
-      - name: Verify seed and pin AppImage packaging tool
-        run: |
-          cd "$RUNNER_TEMP/ryzen-seed"
-          sha256sum -c SHA256SUMS
-          chmod +x Unsloth-AMD-x86_64.AppImage
-          curl --fail --location --retry 3 \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
-            -o "$RUNNER_TEMP/appimagetool"
-          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
-          chmod +x "$RUNNER_TEMP/appimagetool"
-
       - name: Verify backend fast paths before native compilation
         run: |
           python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py
@@ -173,15 +395,8 @@ jobs:
           python3 studio/src-tauri/linux/test-personal-runtime.py
           python3 studio/backend/tests/test_personal_release_fastpaths.py
           python3 studio/src-tauri/linux/test-personal-throughput.py
+          python3 studio/src-tauri/linux/test-personal-build-cache.py
           python3 studio/backend/tests/test_personal_throughput.py
-
-      - name: Compile pinned Vulkan-only inference runtimes
-        run: |
-          work="$RUNNER_TEMP/ryzen-work"
-          for component in llama diffusion whisper audio; do
-            bash studio/src-tauri/linux/build-personal-runtimes.sh "$work" "$work/runtimes" "$component"
-            rm -rf "$work/native/$component" "$work/sources/$component"
-          done
 
       - name: Compile Zen 3 desktop and inference-only backend
         run: |
@@ -196,6 +411,159 @@ jobs:
           with ZipFile(wheels[0]) as wheel:
               assert "studio/backend/personal-vulkan" in wheel.namelist()
           PY
+
+      - name: Measure dependency caches and apply size budgets
+        id: dep-sizes
+        env:
+          CARGO_CACHE_HOME: ${{ steps.deps-key.outputs.cargo_home }}
+        run: |
+          measure() {
+            local id=$1 limit=$2 path bytes total=0
+            shift 2
+            for path in "$@"; do
+              [[ -e "$path" ]] || continue
+              bytes=$(du -sb "$path" | cut -f1)
+              total=$((total + bytes))
+            done
+            echo "$id cache: $total bytes (limit $limit)"
+            if (( total > 0 && total <= limit )); then echo "$id=true" >> "$GITHUB_OUTPUT"; fi
+          }
+          measure npm 268435456 "$RUNNER_TEMP/npm-cache"
+          measure pip 134217728 "$RUNNER_TEMP/pip-cache"
+          measure cargo 402653184 "$CARGO_CACHE_HOME/registry/cache" "$CARGO_CACHE_HOME/registry/index" "$CARGO_CACHE_HOME/git/db"
+          measure target 1073741824 "$RUNNER_TEMP/ryzen-work/tauri-target"
+
+      - name: Save npm package downloads
+        if: steps.deps-npm.outputs.cache-hit != 'true' && steps.dep-sizes.outputs.npm == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/npm-cache
+          key: ryzen-npm-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('studio/package-lock.json', 'studio/frontend/package-lock.json') }}
+
+      - name: Save pip build downloads
+        if: steps.deps-pip.outputs.cache-hit != 'true' && steps.dep-sizes.outputs.pip == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/pip-cache
+          key: ryzen-pip-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('pyproject.toml', 'studio/src-tauri/linux/build-backend-wheel.sh') }}
+
+      - name: Save Cargo package downloads
+        if: steps.deps-cargo.outputs.cache-hit != 'true' && steps.dep-sizes.outputs.cargo == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ${{ steps.deps-key.outputs.cargo_home }}/registry/cache
+            ${{ steps.deps-key.outputs.cargo_home }}/registry/index
+            ${{ steps.deps-key.outputs.cargo_home }}/git/db
+          key: ryzen-cargo-v1-${{ steps.deps-key.outputs.digest }}-${{ hashFiles('studio/src-tauri/Cargo.lock') }}
+
+      - name: Save Cargo compiler artifacts (exact key only)
+        if: steps.deps-target.outputs.cache-hit != 'true' && steps.dep-sizes.outputs.target == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/ryzen-work/tauri-target
+          key: ryzen-cargo-target-v1-${{ steps.deps-key.outputs.digest }}-${{ steps.deps-key.outputs.source }}
+
+      - name: Archive desktop executable and backend wheel
+        run: |
+          stage="$RUNNER_TEMP/desktop-transfer"
+          mkdir -p "$stage"
+          tar -C "$RUNNER_TEMP/ryzen-work" -cf "$stage/desktop.tar" tauri-target/x86_64-unknown-linux-gnu/release/unsloth-studio
+          tar -C studio/src-tauri -rf "$stage/desktop.tar" backend-wheel
+          (cd "$stage" && sha256sum desktop.tar > SHA256SUMS)
+
+      - name: Transfer desktop build to packaging
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ryzen-desktop
+          path: ${{ runner.temp }}/desktop-transfer/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  ryzen:
+    name: Package and verify Ryzen Vulkan AppImage
+    needs: [seed, native, desktop]
+    runs-on: ubuntu-latest
+    container:
+      image: debian:13
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      DEBIAN_FRONTEND: noninteractive
+      UNSLOTH_BUILD_JOBS: '2'
+      UNSLOTH_PERSONAL_VULKAN: '1'
+      VITE_UNSLOTH_PERSONAL_VULKAN: '1'
+      CARGO_PROFILE_RELEASE_LTO: fat
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: '3'
+      CARGO_BUILD_JOBS: '2'
+      RUSTFLAGS: -C target-cpu=znver3
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - name: Install Debian 13 build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config cmake ninja-build \
+            python3 python3-venv python3-dev libssl-dev libcurl4-openssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libvulkan-dev glslc glslang-tools spirv-headers \
+            spirv-tools libshaderc-dev patchelf desktop-file-utils squashfs-tools \
+            fontconfig xdg-utils file unzip zstd
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ryzen-build-seed
+          path: ${{ runner.temp }}/ryzen-seed
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ryzen-desktop
+          path: ${{ runner.temp }}/desktop-transfer
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: ryzen-runtime-*
+          path: ${{ runner.temp }}/runtime-transfer
+
+      - name: Verify and restore compiled artifacts
+        run: |
+          work="$RUNNER_TEMP/ryzen-work"
+          mkdir -p "$work/runtimes"
+          desktop="$RUNNER_TEMP/desktop-transfer"
+          (cd "$desktop" && sha256sum --strict -c SHA256SUMS)
+          tar -xf "$desktop/desktop.tar" -C "$work" tauri-target/x86_64-unknown-linux-gnu/release/unsloth-studio
+          tar -xf "$desktop/desktop.tar" -C studio/src-tauri backend-wheel
+          test -x "$work/tauri-target/x86_64-unknown-linux-gnu/release/unsloth-studio"
+          for component in llama diffusion whisper audio; do
+            dir="$RUNNER_TEMP/runtime-transfer/ryzen-runtime-$component"
+            bash studio/src-tauri/linux/personal-runtime-archive.sh unpack "$component" "$dir" "$work/runtimes"
+          done
+
+      - name: Verify seed and pin AppImage packaging tool
+        run: |
+          cd "$RUNNER_TEMP/ryzen-seed"
+          sha256sum -c SHA256SUMS
+          chmod +x Unsloth-AMD-x86_64.AppImage
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
+            -o "$RUNNER_TEMP/appimagetool"
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
 
       - name: Repackage and verify Ryzen Vulkan AppImage
         run: |

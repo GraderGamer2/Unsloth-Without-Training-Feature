@@ -41,6 +41,27 @@ class ThroughputTests(unittest.TestCase):
                             self.assertEqual(set(old),set(new))
                             self.assertLessEqual(len(new),len(old))
 
+    def test_iq_ternary_cached_addresses(self):
+        # Compare every lane address, including inactive tail blocks.
+        for width, stride, count in ((4, 1, 4), (2, 8, 8)):
+            for base in (0, 1, 4, 127, 256):
+                for y in range(0, 256, 2):
+                    cached = [(base + y) // width + stride * k for k in range(count)]
+                    for cols in (1, 2, 4):
+                        for rows in (1, 2, 4):
+                            reuse = cols == 1 and rows > 1
+                            for valid in (False, True):
+                                if not valid:
+                                    # No cached load occurs for an inactive TQ2 lane.
+                                    self.assertFalse(reuse and valid)
+                                    continue
+                                for row in range(rows):
+                                    for col in range(cols):
+                                        expected = [(col * 1024 + base + y) // width + stride * k
+                                                    for k in range(count)]
+                                        actual = cached if reuse else expected
+                                        self.assertEqual(actual, expected)
+
     def test_ring_indices(self):
         for cap in range(1,65):
             for first in range(cap):
