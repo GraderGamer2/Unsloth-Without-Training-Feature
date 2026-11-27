@@ -66,15 +66,28 @@ def patch_fingerprint(name, component):
     selected = module.patch_specs(component)
     # All code and unknown assignments are hashed. Only current declarative
     # patch tables are replaced by the actual selected patch specifications.
-    known_tables = {"COMMON", "LLAMA", "WHISPER", "DIFFUSION", "AUDIO", "DEBUG", "DEBUG_OFF", "TERNARY"}
+    known_tables = {"COMMON", "LLAMA", "WHISPER", "DIFFUSION", "AUDIO", "DEBUG", "DEBUG_OFF", "TERNARY", "ENGINE_EXTRA"}
     tree = ast.parse(source)
     kept = []
     for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id in known_tables
-                and isinstance(node.value, (ast.Constant, ast.Tuple, ast.List))):
-            continue
+        # Only ignore declarative literal tables (including literal += entries).
+        # Arbitrary executable modifications still invalidate every component.
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AugAssign) and isinstance(node.op, ast.Add):
+            target = node.target
+        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+            if (target.value.id == "ENGINE_EXTRA" and isinstance(target.slice, ast.Constant)
+                    and target.slice.value in COMPONENTS):
+                target = target.value
+        if isinstance(target, ast.Name) and target.id in known_tables:
+            try:
+                ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError):
+                pass
+            else:
+                continue
         kept.append(ast.dump(node, include_attributes=False))
     return json.dumps([kept, selected], ensure_ascii=False, separators=(",", ":"))
 

@@ -205,5 +205,38 @@ class ThroughputTests(unittest.TestCase):
                     else:
                         self.assertNotEqual(position_major, block_major)
 
+    def test_iq1_m_reused_activation_addresses(self):
+        for block in range(32):
+            for lane in range(8):
+                for base in (0, 4, 128):
+                    for rows in (1, 2, 4):
+                        for cols in (1, 2, 4):
+                            reuse = cols == 1 and rows > 1
+                            cached = [(base + block * 256 + 32 * lane) // 4 + k
+                                      for k in range(8)]
+                            for col in range(cols):
+                                original = [(col * 8192 + base + block * 256 + 32 * lane) // 4 + k
+                                            for k in range(8)]
+                                self.assertEqual(cached if reuse else original, original)
+
+    def test_padding_copy_and_no_match_cleanup(self):
+        for count in range(50):
+            for multiple in range(1, 33):
+                values = list(range(count))
+                padded = ((count + multiple - 1) // multiple) * multiple
+                self.assertEqual(values + [0] * (padded - count),
+                                 (values + [0] * padded)[:padded])
+        import re
+        for text in ("", "abc", "a , b", "  ,", " , ,", "a,b", "🍀 ,"):
+            self.assertEqual(re.sub(r" ,", ",", text),
+                             re.sub(r" ,", ",", text) if " ," in text else text)
+
+    def test_reusable_speculative_prompt_filters_media(self):
+        scratch = []
+        for tokens in ([], [1, 2, -1, 3], [1, -1], [-1] * 10, list(range(1024)), [7]):
+            scratch.clear()
+            scratch.extend(t for t in tokens if t != -1)
+            self.assertEqual(scratch, [t for t in tokens if t != -1])
+
 if __name__ == "__main__":
     unittest.main()

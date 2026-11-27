@@ -338,6 +338,117 @@ LLAMA += [
 ]
 
 
+# Additional verified engine hot paths.
+LLAMA += [
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq1_m.comp",
+    "    // Loop over rows in the superblock\n    [[unroll]] for (uint n = 0; n < num_rows; ++n) {",
+    "    // Single-column decode: activation vectors do not depend on the weight row.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[8];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 8; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n\n    // Loop over rows in the superblock\n    [[unroll]] for (uint n = 0; n < num_rows; ++n) {"
+  ],
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq1_m.comp",
+    "                b_vals[idx] = vec4(data_b_v4[base_b_idx + idx]);",
+    "                b_vals[idx] = reuse_b ? cached_b[idx] : vec4(data_b_v4[base_b_idx + idx]);"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "            // advance the start when buffer is full\n            first = (first + 1) % capacity;",
+    "            // Advance with a wrap check rather than a runtime division.\n            if (++first == capacity) { first = 0; }"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "        data[pos] = value;\n        pos = (pos + 1) % capacity;",
+    "        data[pos] = value;\n        if (++pos == capacity) { pos = 0; }"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "        T value = data[first];\n        first = (first + 1) % capacity;",
+    "        T value = data[first];\n        if (++first == capacity) { first = 0; }"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "        return data[(first + sz - i - 1) % capacity];",
+    "        const size_t idx = first + sz - i - 1;\n        return data[idx >= capacity ? idx - capacity : idx];"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "        for (size_t i = 0; i < sz; i++) {\n            result.push_back(data[(first + i) % capacity]);\n        }",
+    "        if (sz != 0) {\n            const size_t contiguous = std::min(sz, capacity - first);\n            result.insert(result.end(), data.begin() + first, data.begin() + first + contiguous);\n            result.insert(result.end(), data.begin(), data.begin() + (sz - contiguous));\n        }"
+  ],
+  [
+    "src/llama-kv-cache.cpp",
+    "llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {\n    llama_kv_cache::slot_info_vec_t res;",
+    "llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {\n    llama_kv_cache::slot_info_vec_t res;\n    res.reserve(ubatches.size());"
+  ],
+  [
+    "src/llama-kv-cache.cpp",
+    "    std::vector<state_t> states;\n\n    bool success = true;",
+    "    std::vector<state_t> states;\n    states.reserve(ubatches.size());\n\n    bool success = true;"
+  ],
+  [
+    "src/llama-kv-cache.cpp",
+    "            state_t state = { sinfo_new, v_heads, {} };\n\n            for (uint32_t s = 0; s < sinfo_new.n_stream(); ++s) {",
+    "            state_t state = { sinfo_new, v_heads, {} };\n            state.v_cells.reserve(sinfo_new.n_stream());\n\n            for (uint32_t s = 0; s < sinfo_new.n_stream(); ++s) {"
+  ],
+  [
+    "src/llama-model-loader.cpp",
+    "    for (int idx = 0; idx < n_split; ++idx) {\n        int ret = llama_split_path(buf.data(), buf.size(), split_prefix.c_str(), idx, n_split);\n        paths.push_back(std::string(buf.data(), ret));\n    }",
+    "    if (n_split > 0) {\n        paths.reserve(n_split);\n    }\n    for (int idx = 0; idx < n_split; ++idx) {\n        int ret = llama_split_path(buf.data(), buf.size(), split_prefix.c_str(), idx, n_split);\n        paths.emplace_back(buf.data(), ret);\n    }"
+  ],
+  [
+    "tools/mtmd/mtmd-image.cpp",
+    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    for (const auto & img : imgs) {",
+    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    entries.reserve(entries.size() + imgs.size());\n    for (const auto & img : imgs) {"
+  ]
+]
+ENGINE_EXTRA["whisper"] += [
+  [
+    "src/whisper.cpp",
+    "    std::vector<std::pair<std::vector<uint32_t>, whisper_partial_utf8>> candidates_decoded;\n    std::vector<whisper_grammar_candidate>                              candidates_grammar;\n\n    for (whisper_token id = 0; id < eot; ++id) {",
+    "    std::vector<std::pair<std::vector<uint32_t>, whisper_partial_utf8>> candidates_decoded;\n    std::vector<whisper_grammar_candidate>                              candidates_grammar;\n    if (eot > 0) {\n        candidates_decoded.reserve(eot);\n        candidates_grammar.reserve(eot);\n    }\n\n    for (whisper_token id = 0; id < eot; ++id) {"
+  ]
+]
+ENGINE_EXTRA["diffusion"] += [
+  [
+    "src/tokenizers/tokenizer.cpp",
+    "    text = clean_up_tokenization(text);\n    text = trim(text);",
+    "    // The cleanup is a literal substitution. Skip the full string copy when\n    // there is no match; trimming still runs exactly as before.\n    if (text.find(\" ,\") != std::string::npos) {\n        text = clean_up_tokenization(text);\n    }\n    text = trim(text);"
+  ]
+]
+ENGINE_EXTRA["audio"] += [
+  [
+    "src/framework/audio/waveform_ops.cpp",
+    "    std::vector<float> out = samples;\n    out.resize(static_cast<size_t>(padded_samples), 0.0F);",
+    "    // Reserve the final length before copying so padding never reallocates\n    // and copies the existing waveform a second time.\n    std::vector<float> out;\n    out.reserve(static_cast<size_t>(padded_samples));\n    out.insert(out.end(), samples.begin(), samples.end());\n    out.resize(static_cast<size_t>(padded_samples), 0.0F);"
+  ]
+]
+
+
+# Reuse speculative prompt storage across long-context rounds.
+LLAMA += [
+  [
+    "tools/server/server-common.h",
+    "    llama_tokens get_text_tokens() const;",
+    "    llama_tokens get_text_tokens() const;\n    // Fill caller-owned scratch storage without allocating a fresh vector per draft.\n    void copy_text_tokens(llama_tokens & res) const;"
+  ],
+  [
+    "tools/server/server-common.cpp",
+    "llama_tokens server_tokens::get_text_tokens() const {\n    llama_tokens res;\n    res.reserve(tokens.size());\n    for (llama_token t : tokens) {\n        if (t != LLAMA_TOKEN_NULL) {\n            res.push_back(t);\n        }\n    }\n    return res;\n}",
+    "llama_tokens server_tokens::get_text_tokens() const {\n    llama_tokens res;\n    copy_text_tokens(res);\n    return res;\n}\n\nvoid server_tokens::copy_text_tokens(llama_tokens & res) const {\n    res.clear();\n    // Reserve once for a fresh vector. Existing scratch grows geometrically\n    // via push_back rather than reserving one extra token on every round.\n    if (res.capacity() == 0 || res.capacity() < tokens.size() / 2) {\n        res.reserve(tokens.size());\n    }\n    for (llama_token t : tokens) {\n        if (t != LLAMA_TOKEN_NULL) {\n            res.push_back(t);\n        }\n    }\n}"
+  ],
+  [
+    "tools/server/server-context.cpp",
+    "                        slot.spec_prompt = slot.prompt.tokens.get_text_tokens();",
+    "                        slot.prompt.tokens.copy_text_tokens(slot.spec_prompt);"
+  ],
+  [
+    "src/llama-sampler.cpp",
+    "    // Apply frequency and presence penalties to the cur_p\n    for (size_t i = 0; i < cur_p->size; ++i) {",
+    "    // No prior tokens means no penalties. Preserve the original sorted flag\n    // update so tied candidates retain the existing downstream sort behavior.\n    if (ctx->token_count.empty()) {\n        cur_p->sorted = false;\n        return;\n    }\n\n    // Apply frequency and presence penalties to the cur_p\n    for (size_t i = 0; i < cur_p->size; ++i) {"
+  ]
+]
+
+
 def patch_specs(component):
     if component not in ("llama", "diffusion", "whisper", "audio"):
         raise ValueError(component)

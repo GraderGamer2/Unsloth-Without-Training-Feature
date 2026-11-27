@@ -196,8 +196,10 @@ def _validate_masked_sources(report: str, sources: list[dict], placeholders: dic
 
     def catalog_url(url: str) -> str | None:
         # The scheme is case-insensitive; the catalog spells it in lower case.
+        if url in source_by_url:
+            return url
         lowered = re.sub(r"^https?://", lambda m: m.group(0).lower(), url, flags = re.IGNORECASE)
-        return url if url in source_by_url else lowered if lowered in source_by_url else None
+        return lowered if lowered in source_by_url else None
 
     def citation(url: str) -> str | None:
         url = catalog_url(url)

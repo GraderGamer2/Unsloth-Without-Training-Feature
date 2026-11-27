@@ -48,8 +48,12 @@ async def aiter_sse_lines(response):
             if not held_cr and "\n" not in text and "\r" not in text:
                 parts.append(text)
                 continue
-            pending = "".join(parts) + text if parts else text
-            parts.clear()
+            if parts:
+                parts.append(text)
+                pending = "".join(parts)
+                parts.clear()
+            else:
+                pending = text
             lines, rest = _split_complete_sse_lines(pending)
             if rest:
                 parts.append(rest)

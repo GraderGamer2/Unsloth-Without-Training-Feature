@@ -36,10 +36,10 @@ function parse(text: string): MarkdownNode {
 function ambiguousMarkerIndex(text: string): number {
   const lineStart =
     Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
-  const line = text.slice(lineStart);
-  if (line.length > MAX_AMBIGUOUS_LINE) {
+  if (text.length - lineStart > MAX_AMBIGUOUS_LINE) {
     return -1;
   }
+  const line = text.slice(lineStart);
   const blockquotePrefix = line.match(BLOCKQUOTE_PREFIX_RE)?.[0] ?? "";
   const content = line.slice(blockquotePrefix.length);
   const marker = content.match(AMBIGUOUS_BREAK_ITEM_RE)?.[1];

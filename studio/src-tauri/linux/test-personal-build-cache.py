@@ -35,5 +35,27 @@ class CacheKeyTests(unittest.TestCase):
         self.assertNotEqual(MOD["digest"](["a", "bc"]), MOD["digest"](["ab", "c"]))
 
 
+    def test_literal_patch_amendments_do_not_invalidate_unrelated_engines(self):
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "probe.py"
+            baseline = ('LLAMA = []\nENGINE_EXTRA = {"audio": []}\n'
+                        'def patch_specs(component):\n'
+                        '    return LLAMA if component == "llama" else ENGINE_EXTRA[component]\n')
+            source.write_text(baseline)
+            with patch.dict(MOD["patch_fingerprint"].__globals__, {"ROOT": root}):
+                a = MOD["patch_fingerprint"]("probe.py", "audio")
+                l = MOD["patch_fingerprint"]("probe.py", "llama")
+                source.write_text(baseline + 'LLAMA += [("x", "before", "after")]\n')
+                self.assertEqual(a, MOD["patch_fingerprint"]("probe.py", "audio"))
+                self.assertNotEqual(l, MOD["patch_fingerprint"]("probe.py", "llama"))
+                source.write_text(baseline + 'ENGINE_EXTRA["audio"] += [("a", "b", "c")]\n')
+                self.assertNotEqual(a, MOD["patch_fingerprint"]("probe.py", "audio"))
+                self.assertEqual(l, MOD["patch_fingerprint"]("probe.py", "llama"))
+                source.write_text(baseline + 'LLAMA += list()\n')
+                self.assertNotEqual(a, MOD["patch_fingerprint"]("probe.py", "audio"))
+
 if __name__ == "__main__":
     unittest.main()

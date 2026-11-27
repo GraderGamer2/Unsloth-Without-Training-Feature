@@ -1298,10 +1298,10 @@ class ResearchSupervisor:
         targets = []
         # A results batch can repeat URLs before fetched_urls is updated.
         # Keep the first source for each URL; failed reads remain retryable.
-        seen = set(fetched_urls)
+        seen = set()
         for source in step_sources:
             url = str(source.get("url") or "")
-            if url and url not in seen:
+            if url and url not in fetched_urls and url not in seen:
                 seen.add(url)
                 targets.append(source)
             if len(targets) >= cap:
