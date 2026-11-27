@@ -12,6 +12,12 @@ APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 PATH="$APPDIR/usr/bin:$APPDIR/usr/sbin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
 export APPDIR PATH
 
+# Scope the core-file limit to this application and its children. Do not change
+# host coredump configuration, GPU drivers or kernel settings.
+if [ -d "$APPDIR/usr/lib/Unsloth/personal-runtimes" ]; then
+  ulimit -c 0 || true
+fi
+
 # Host mode runs a copy of the executable whose $ORIGIN/../lib RUNPATH reaches nothing, so the
 # whole GTK/WebKit stack comes from the host. Undo the gtk and gstreamer hook exports that pin
 # GTK, GIO, GSettings and GStreamer to the bundle; their inherited values are already gone.

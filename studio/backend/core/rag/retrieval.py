@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import heapq
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -106,7 +107,7 @@ _untagged_warned = False
 def _warn_once_on_untagged(conn: sqlite3.Connection) -> None:
     """Warns once that untagged documents are served as current; reports rather than re-embeds unasked."""
     global _untagged_warned
-    if _untagged_warned:
+    if _untagged_warned or not logger.isEnabledFor(logging.WARNING):
         return
     _untagged_warned = True
     try:
@@ -142,12 +143,22 @@ def _rrf(
                 cur.dense_score = (
                     cur.dense_score if cur.dense_score is not None else hit.dense_score
                 )
+    # Apply the same cosine floor before selecting the top ranks. nlargest
+    # preserves insertion order on ties, just like the previous stable sort.
+    eligible = (
+        (cid, s) for cid, s in fused.items()
+        if min_score <= 0 or best[cid].dense_score is None or best[cid].dense_score >= min_score
+    )
+    if top_k < 0:  # Preserve the existing Python slice semantics for direct callers.
+        selected = sorted(eligible, key = lambda kv: kv[1], reverse = True)[:top_k]
+    else:
+        selected = heapq.nlargest(top_k, eligible, key = lambda kv: kv[1])
     out: list[Hit] = []
-    for cid, s in sorted(fused.items(), key = lambda kv: kv[1], reverse = True):
+    for cid, s in selected:
         h = best[cid]
         h.score = s
         out.append(h)
-    return filter_min_score(out, min_score)[:top_k]
+    return out
 
 
 def retrieve_hybrid(

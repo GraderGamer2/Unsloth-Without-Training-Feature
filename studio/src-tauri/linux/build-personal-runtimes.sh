@@ -54,6 +54,7 @@ compile() {
     if [[ "$component" == audio ]]; then
         ggml="$source/external/ggml"
     fi
+    python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-runtime.py" "$component" "$source"
     # These optional shaders require NVIDIA Vulkan extensions that Rembrandt cannot use.
     python3 - "$ggml/src/ggml-vulkan/CMakeLists.txt" <<'PY'
 import re
@@ -80,6 +81,8 @@ PY
         -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON \
         -DGGML_NATIVE=OFF -DGGML_LTO=ON -DGGML_BACKEND_DL=OFF \
         -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_HIP=OFF \
+        -DGGML_VULKAN_DEBUG=OFF -DGGML_VULKAN_MEMORY_DEBUG=OFF \
+        -DGGML_VULKAN_VALIDATE=OFF -DGGML_VULKAN_CHECK_RESULTS=OFF \
         -DGGML_METAL=OFF -DGGML_SYCL=OFF -DGGML_OPENCL=OFF "$@"
     cmake --build "$build" --parallel "$jobs" --target "${targets[@]}"
     mkdir -p "$output/$component"

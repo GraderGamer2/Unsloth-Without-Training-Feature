@@ -76,13 +76,14 @@ class _Store:
     def write(self, np, n: int, rows, rowids, ids) -> int:
         """Normalise ``rows`` (float32, writable) in place and store the scorable ones at ``n``; returns the new n."""
         valid = _normalise(np, rows)
-        keep = np.flatnonzero(valid)
-        k = len(keep)
-        if k == len(rows):
+        if valid.all():
+            k = len(rows)
             self.mat[n : n + k] = rows
             self.rowids[n : n + k] = rowids
             self.ids[n : n + k] = ids
         else:
+            keep = np.flatnonzero(valid)
+            k = len(keep)
             self.mat[n : n + k] = rows[keep]
             self.rowids[n : n + k] = np.asarray(rowids, dtype = np.int64)[keep]
             self.ids[n : n + k] = [ids[i] for i in keep]
@@ -471,8 +472,10 @@ def _build(key: tuple) -> None:
             "SELECT rowid, chunk_id, embedding FROM chunks_vec WHERE scope=?", (scope,)
         )
         while rows := cur.fetchmany(_FETCH):
-            blk = np.frombuffer(b"".join(r[2] for r in rows), dtype = np.float32)
-            blk = blk.reshape(len(rows), dim).copy()
+            # Normalisation needs a writable block. Join into a bytearray directly
+            # rather than allocating immutable bytes and then copying the matrix.
+            blk = np.frombuffer(bytearray().join(r[2] for r in rows), dtype = np.float32)
+            blk = blk.reshape(len(rows), dim)
             store = store.grown(np, n, n + len(rows))
             n = store.write(np, n, blk, [r[0] for r in rows], [r[1] for r in rows])
     finally:

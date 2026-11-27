@@ -28,6 +28,10 @@ class ManagedEngineLog:
 
     @classmethod
     def open(cls, engine: str) -> ManagedEngineLog | None:
+        from utils.gpu_policy import personal_vulkan
+
+        if personal_vulkan():
+            return None
         from utils.paths import studio_root
 
         subdirectory, pattern = MANAGED_ENGINE_LOG_FAMILIES[engine]

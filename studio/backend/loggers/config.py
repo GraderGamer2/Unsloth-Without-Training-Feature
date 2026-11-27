@@ -402,7 +402,13 @@ class LogConfig:
             def discard_event(_logger, _method, _event):
                 raise structlog.DropEvent
 
-            structlog.configure(processors = [discard_event], cache_logger_on_first_use = False)
+            # Filtering below CRITICAL returns before constructing an event or
+            # invoking processors. The discard processor also handles CRITICAL.
+            structlog.configure(
+                processors = [discard_event],
+                wrapper_class = structlog.make_filtering_bound_logger(logging.CRITICAL),
+                cache_logger_on_first_use = True,
+            )
             return structlog.get_logger(service_name)
         log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
         log_level = getattr(logging, log_level_name, logging.INFO)

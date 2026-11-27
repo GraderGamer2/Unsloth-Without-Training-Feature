@@ -42,10 +42,11 @@ async def aiter_sse_lines(response):
     chunks = response.aiter_text()
     try:
         async for text in chunks:
+            if not text:
+                continue
             held_cr = bool(parts) and parts[-1].endswith("\r")
             if not held_cr and "\n" not in text and "\r" not in text:
-                if text:
-                    parts.append(text)
+                parts.append(text)
                 continue
             pending = "".join(parts) + text if parts else text
             parts.clear()

@@ -170,6 +170,8 @@ jobs:
           python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py
           python3 studio/backend/tests/test_personal_backend_fastpaths.py
           python3 studio/src-tauri/linux/test-personal-llama-vulkan.py
+          python3 studio/src-tauri/linux/test-personal-runtime.py
+          python3 studio/backend/tests/test_personal_release_fastpaths.py
 
       - name: Compile pinned Vulkan-only inference runtimes
         run: |

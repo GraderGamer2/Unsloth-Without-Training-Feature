@@ -70,7 +70,7 @@ impl PhaseLogWriter {
             current_bytes: 0,
             segments: Vec::new(),
             file: None,
-            disabled: false,
+            disabled: cfg!(all(target_os = "linux", feature = "personal-vulkan")),
             disable_reason: None,
             diagnostics,
             max_bytes: PHASE_LOG_SEGMENT_MAX_BYTES,
@@ -311,6 +311,10 @@ pub(crate) fn ensure_logs_dir_at(dir: &Path) -> std::io::Result<()> {
 }
 
 pub fn append_phase_line(handle: &PhaseLogHandle, stream: &str, text: &str) {
+    // No diagnostic file, rotation, formatting or mutex acquisition in this build.
+    if cfg!(all(target_os = "linux", feature = "personal-vulkan")) {
+        return;
+    }
     if let Ok(mut writer) = handle.lock() {
         writer.append_line(stream, text);
     }

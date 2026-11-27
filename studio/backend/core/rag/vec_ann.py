@@ -155,7 +155,9 @@ def search(np, ann: Ann, q, fetch: int):
         dist.append(d)
     if not keys:
         return np.empty(0, np.int64), np.empty(0, np.float64)
-    keys, dist = np.concatenate(keys), np.concatenate(dist)
+    # A single index/delta already owns contiguous result arrays. Advanced
+    # indexing below still returns independent arrays with the same tie order.
+    keys, dist = (keys[0], dist[0]) if len(keys) == 1 else (np.concatenate(keys), np.concatenate(dist))
     order = np.lexsort((keys, dist))[:f]
     return keys[order], dist[order]
 
