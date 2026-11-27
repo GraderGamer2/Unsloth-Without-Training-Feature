@@ -86,6 +86,14 @@ interface DollarPairs {
 
 const appendDollarPairs = (state: DollarPairs, str: string): void => {
   let { closed, run } = state;
+  if (!str.includes("$")) {
+    // Ordinary text ends a pending dollar run without scanning every code unit.
+    if (str.length > 0 && run > 0) {
+      state.closed = closed + (run >> 1);
+      state.run = 0;
+    }
+    return;
+  }
   for (let i = 0; i < str.length; i += 1) {
     if (str.charCodeAt(i) === 36) {
       run += 1;

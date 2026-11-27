@@ -144,7 +144,7 @@ LLAMA = [
   [
     "src/llama-kv-cache.cpp",
     "            auto & idxs = seq_idxs[seq_id];\n\n            if (!alibi) {\n                if (seq_srct.find(seq_id) != seq_srct.end()) {\n                    const uint32_t srct = seq_srct[seq_id];\n\n                    const uint64_t idst_prev = n_kv*srct;\n\n                    std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);\n\n                    prev = true;\n                } else {\n                    idxs.clear();\n                    idxs.reserve(ubatch->n_tokens + n_swa + 32);\n\n                    seq_srct[seq_id] = i;\n                }\n            }",
-    "            // A one-token stream has no later row to reuse.\n            std::vector<uint32_t> * idxs = nullptr;\n            if (reuse_mask) {\n                idxs = &seq_idxs[seq_id];\n                const auto inserted = seq_srct.emplace(seq_id, i);\n                if (!inserted.second) {\n                    const uint64_t idst_prev = n_kv*inserted.first->second;\n                    std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);\n                    prev = true;\n                } else {\n                    idxs->clear();\n                    idxs->reserve(ubatch->n_tokens + n_swa + 32);\n                }\n            }"
+    "            // A one-token stream has no later row to reuse.\n            std::vector<uint32_t> * idxs = nullptr;\n            if (reuse_mask) {\n                const auto inserted = seq_masks.try_emplace(seq_id, i);\n                auto & mask = inserted.first->second;\n                idxs = &mask.idxs;\n                if (!inserted.second) {\n                    const uint64_t idst_prev = n_kv*mask.src;\n                    std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);\n                    prev = true;\n                } else {\n                    idxs->reserve(ubatch->n_tokens + n_swa + 32);\n                }\n            }"
   ],
   [
     "src/llama-kv-cache.cpp",
@@ -185,8 +185,14 @@ LLAMA = [
     "ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp",
     "    std::vector<vk::BufferCopy> slices(1);\n    if (width == spitch && width == dpitch) {\n        // Only do single write if stride is equal\n        slices[0].srcOffset = offset;\n        slices[0].dstOffset = buf_offset;\n        slices[0].size = width * height;\n    } else {\n        slices.resize(height);\n        for (size_t i = 0; i < height; i++) {\n            slices[i].srcOffset = offset + i * spitch;\n            slices[i].dstOffset = buf_offset + i * dpitch;\n            slices[i].size = width;\n        }\n    }\n\n    if (buf != nullptr) {\n        // Memory is pinned, use as staging buffer\n        ggml_vk_sync_buffers(nullptr, subctx);\n        subctx->s->buffer->buf.copyBuffer(src->buffer, buf->buffer, slices);\n\n        return true;\n    }",
     "    if (buf != nullptr) {\n        // Build regions only when the pinned path is taken.\n        if (width == spitch && width == dpitch) {\n            const vk::BufferCopy slice{offset, buf_offset, width * height};\n            ggml_vk_sync_buffers(nullptr, subctx);\n            subctx->s->buffer->buf.copyBuffer(src->buffer, buf->buffer, {slice});\n        } else {\n            std::vector<vk::BufferCopy> slices(height);\n            for (size_t i = 0; i < height; i++) {\n                slices[i].srcOffset = offset + i * spitch;\n                slices[i].dstOffset = buf_offset + i * dpitch;\n                slices[i].size = width;\n            }\n            ggml_vk_sync_buffers(nullptr, subctx);\n            subctx->s->buffer->buf.copyBuffer(src->buffer, buf->buffer, slices);\n        }\n        return true;\n    }"
+  ],
+  [
+    "src/llama-kv-cache.cpp",
+    "        std::unordered_map<llama_seq_id, uint32_t>              seq_srct;\n        std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;",
+    "        struct seq_mask {\n            uint32_t src;\n            std::vector<uint32_t> idxs;\n            explicit seq_mask(uint32_t src_) : src(src_) {}\n        };\n        std::unordered_map<llama_seq_id, seq_mask> seq_masks;"
   ]
 ]
+
 
 def patch_specs(component):
     if component not in ("llama", "diffusion", "whisper", "audio"):

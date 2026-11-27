@@ -1043,7 +1043,7 @@ def _drop_incompatible(
                 f"SELECT c.id FROM chunks c JOIN documents d ON d.id=c.document_id "
                 f"WHERE c.id IN ({placeholders}) AND {_COMPATIBLE_CHUNKS}",
                 (*batch, embedding_model, embedding_model, untagged),
-            ).fetchall()
+            )
         )
     return [t for t in candidates if t[0] in valid]
 
@@ -1074,7 +1074,7 @@ def chunks_by_id(conn: sqlite3.Connection, ids) -> dict:
         f"AND (d.linked_folder_id IS NULL OR EXISTS "
         f"(SELECT 1 FROM linked_folder_files ff WHERE ff.document_id=d.id))",
         list(ids),
-    ).fetchall()
+    )
     return {r["id"]: r for r in rows}
 
 

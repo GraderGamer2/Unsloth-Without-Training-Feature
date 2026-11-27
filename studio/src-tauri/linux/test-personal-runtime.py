@@ -28,6 +28,21 @@ class RuntimePatchTests(unittest.TestCase):
                     patch["apply"](component, root)
                     self.assertEqual(after, {p: (root / p).read_bytes() for p in originals})
 
+    def test_whisper_silent_tail_partition(self):
+        # Model the old interleaved per-worker tail and the new contiguous fill.
+        for total in (1, 16, 3000, 3001):
+            for first_silent in (0, 1, total // 2, total):
+                if first_silent > total:
+                    continue
+                for threads in (1, 2, 3, 4, 8, 16):
+                    written = set()
+                    for ith in range(threads):
+                        i = ith
+                        while i < first_silent:
+                            i += threads
+                        written.update(range(i, total, threads))
+                    self.assertEqual(written, set(range(first_silent, total)))
+
     def test_whisper_padding_worker_bounds(self):
         # The spectrogram frame count retains the full logical padding.
         # The worker sees only the input and leading reflection.

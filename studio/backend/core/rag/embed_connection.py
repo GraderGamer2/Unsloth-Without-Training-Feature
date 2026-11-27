@@ -171,7 +171,7 @@ class ConnectionEmbeddingBackend:
         if normalize:
             norms = np.linalg.norm(arr, axis = 1, keepdims = True)
             norms[norms == 0] = 1.0
-            arr = arr / norms
+            np.divide(arr, norms, out = arr)
         return arr
 
     def dim(self, *, model_name = None) -> int:

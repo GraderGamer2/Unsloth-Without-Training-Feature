@@ -67,6 +67,79 @@ class ThroughputTests(unittest.TestCase):
         self.assertEqual(outcome(lambda x, y: ns["_parse_and_validate_plan"](x, y, 8), a, ""),
                          expected)
 
+    def test_provider_call_normalized_once(self):
+        from types import SimpleNamespace
+        path = "core/inference/studio_tool_loop.py"
+        ns = source_defs(path, {"_normalized_call", "_mint_streamed_card_id"},
+                         globals_=dict(Any=Any, json=json))
+        normalize = ns["_normalized_call"]
+        calls_made = []
+        def tracked(call, fallback_id=""):
+            calls_made.append(call.get("id"))
+            return normalize(call, fallback_id)
+        method = source_defs(path, {"calls"}, class_name="_Turn",
+                             globals_=dict(Any=Any, _normalized_call=tracked,
+                                           _mint_streamed_card_id=ns["_mint_streamed_card_id"]))["calls"]
+        turn = SimpleNamespace(order=[0, 1, 2, 3], seq_by_key={}, pending_extra={},
+                               healed=[], round=7, _call_is_finished=lambda key: True,
+                               by_index={
+                                   0: {"id":"", "function":{"name":"search", "arguments":"{}"}},
+                                   1: {"id":"tool_call_0", "function":{"name":"fetch", "arguments":'{"x":1}'}},
+                                   2: {"id":"repeat", "function":{"name":"search", "arguments":"broken"}},
+                                   3: {"id":"invalid", "function":{"name":"", "arguments":"{}"}},
+                               })
+        seen, cards = {"repeat"}, set()
+        out = method(turn, seen, cards)
+        self.assertCountEqual(calls_made, ["", "tool_call_0", "repeat", "invalid"])
+        self.assertEqual([c["id"] for c in out], ["call_7_0", "tool_call_0", "repeat_7_2"])
+        self.assertEqual(out[0]["card_id"], "tool_call_1")
+        self.assertEqual(out[1]["arguments"], {"x":1})
+        self.assertEqual(out[2]["arguments"], {"_raw":"broken"})
+        self.assertEqual(out[2]["stream_id"], "repeat")
+        self.assertNotIn("invalid", cards)
+
+    def test_tool_schema_copy_on_write(self):
+        import runpy
+        from pathlib import Path
+        schema = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                    "core/inference/llama_tool_schema.py"))
+        wrap = schema["llama_grammar_tools"]
+        simple = {"function":{"name":"plain", "parameters":{"type":"object",
+                   "properties":{"x":{"type":"string"}}, "required":["x"]}}}
+        nested = {"function":{"name":"nested", "parameters":{"type":"object",
+                  "properties":{"arg":{"type":"object",
+                   "properties":{"z":{"type":"integer"}, "a":{"type":"string"}}}}}}}
+        plain = [simple]
+        self.assertIs(wrap(plain), plain)
+        mixed = [simple, nested]
+        result = wrap(mixed)
+        self.assertIsNot(result, mixed)
+        self.assertIs(result[0], simple)
+        self.assertNotIn("anyOf", nested["function"]["parameters"]["properties"]["arg"])
+        arg = result[1]["function"]["parameters"]["properties"]["arg"]
+        self.assertIn("anyOf", arg)
+        self.assertEqual(list(arg["properties"]), ["z", "a"])
+        self.assertIs(wrap(result), result)
+
+    def test_chunk_merge_offsets(self):
+        from dataclasses import dataclass
+        ns = source_defs("core/rag/chunking.py", {"_Piece", "_merge"},
+                         globals_=dict(dataclass=dataclass))
+        piece = ns["_Piece"]
+        merge = ns["_merge"]
+        rng = random.Random(7735)
+        for _ in range(2000):
+            texts = rng.choices([" ", "\n", "abc", "é", "\u2003", "  test  ", "猫"], k=rng.randrange(1, 30))
+            starts = []
+            cursor = 0
+            for text in texts:
+                starts.append(cursor)
+                cursor += len(text)
+            original = "".join(texts)
+            for text, start, end in merge([piece(t, len(t)) for t in texts], starts, 16, 5):
+                self.assertEqual(original[start:end], text)
+                self.assertEqual(text, text.strip())
+
     def test_credential_prefix_scan(self):
         prefixes = ("sk-unsloth-", "desktop-")
         terms = frozenset(" \t\r\n\"',;)]}" + chr(96))

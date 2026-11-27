@@ -60,7 +60,7 @@ jobs:
       - name: Fingerprint portable seed inputs
         id: seed-key
         run: |
-          digest=$( { git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$'; dpkg-query -W; node --version; npm --version; rustc -vV; cargo --version; python3 --version; printf '%s\n' "${ImageOS:-}" "${ImageVersion:-}"; } | sha256sum | cut -d' ' -f1)
+          digest=$( { git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$|[[:space:]](studio/backend/tests/|studio/frontend/tests/|tests/)'; dpkg-query -W; node --version; npm --version; rustc -vV; cargo --version; python3 --version; printf '%s\n' "${ImageOS:-}" "${ImageVersion:-}"; } | sha256sum | cut -d' ' -f1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Restore exact portable seed
@@ -347,9 +347,9 @@ jobs:
           echo "cargo_home=$cargo_home" >> "$GITHUB_OUTPUT"
           echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/npm-cache" >> "$GITHUB_ENV"
           echo "PIP_CACHE_DIR=$RUNNER_TEMP/pip-cache" >> "$GITHUB_ENV"
-          digest=$( { dpkg-query -W; rustc -vV; cargo --version; gcc --version; ld --version; node --version; npm --version; python3 --version; printf '%s\n' "$RUSTFLAGS" "$CARGO_PROFILE_RELEASE_LTO" "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" "$CARGO_PROFILE_RELEASE_OPT_LEVEL" "$CARGO_PROFILE_RELEASE_STRIP"; } | sha256sum | cut -d' ' -f1)
+          digest=$( { dpkg-query -W; rustc -vV; cargo --version; gcc --version; ld --version; node --version; npm --version; python3 --version; printf '%s\n' "$RUSTFLAGS" "$CARGO_PROFILE_RELEASE_LTO" "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" "$CARGO_PROFILE_RELEASE_OPT_LEVEL" "$CARGO_PROFILE_RELEASE_STRIP" "$UNSLOTH_PERSONAL_VULKAN" "$VITE_UNSLOTH_PERSONAL_VULKAN" personal-vulkan; } | sha256sum | cut -d' ' -f1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          source_digest=$(git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$' | sha256sum | cut -d' ' -f1)
+          source_digest=$(git ls-files -s | grep -vE 'studio/src-tauri/linux/(apply-personal-[^/]+\.py|test-personal-[^/]+\.py|personal-build-cache-key\.py|personal-runtime-archive\.sh|build-personal-runtimes\.sh)$|[[:space:]](studio/backend/tests/|studio/frontend/tests/|tests/)' | sha256sum | cut -d' ' -f1)
           echo "source=$source_digest" >> "$GITHUB_OUTPUT"
 
       - name: Restore npm package downloads
@@ -404,7 +404,7 @@ jobs:
 
       - name: Verify backend fast paths before native compilation
         run: |
-          python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py
+          python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py studio/backend/core/inference/context_window.py studio/backend/core/inference/studio_tool_loop.py studio/backend/core/inference/llama_tool_schema.py studio/backend/core/rag/store.py studio/backend/core/rag/embed_connection.py studio/backend/core/research_runs.py
           python3 studio/backend/tests/test_personal_backend_fastpaths.py
           python3 studio/src-tauri/linux/test-personal-llama-vulkan.py
           python3 studio/src-tauri/linux/test-personal-runtime.py
@@ -412,6 +412,11 @@ jobs:
           python3 studio/src-tauri/linux/test-personal-throughput.py
           python3 studio/src-tauri/linux/test-personal-build-cache.py
           python3 studio/backend/tests/test_personal_throughput.py
+
+      - name: Verify Markdown streaming behavior
+        working-directory: studio/frontend
+        run: |
+          node --experimental-strip-types --test tests/parse-markdown-blocks-dollar-merge.test.ts tests/streaming-render-schedule.test.ts
 
       - name: Compile Zen 3 desktop and inference-only backend
         run: |

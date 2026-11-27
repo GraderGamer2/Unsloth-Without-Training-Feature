@@ -146,11 +146,15 @@ def _relax(schema: Any, *, nested: bool, root: dict) -> Any:
     for keyword, child_nested in _MAP_KEYWORDS.items():
         children = schema.get(keyword)
         if isinstance(children, dict):
-            relaxed = {
-                key: _relax(value, nested = child_nested, root = root)
-                for key, value in children.items()
-            }
-            if any(relaxed[key] is not children[key] for key in children):
+            # Most tool schemas need no change. Copy only on the first changed child.
+            relaxed = None
+            for key, value in children.items():
+                updated = _relax(value, nested = child_nested, root = root)
+                if updated is not value:
+                    if relaxed is None:
+                        relaxed = dict(children)
+                    relaxed[key] = updated
+            if relaxed is not None:
                 out = {**out, keyword: relaxed}
     for keyword in _SINGLE_KEYWORDS:
         child = schema.get(keyword)
@@ -162,8 +166,14 @@ def _relax(schema: Any, *, nested: bool, root: dict) -> Any:
         children = schema.get(keyword)
         if isinstance(children, list):
             mode = nested if child_nested is None else child_nested
-            relaxed = [_relax(value, nested = mode, root = root) for value in children]
-            if any(new is not old for new, old in zip(relaxed, children)):
+            relaxed = None
+            for index, value in enumerate(children):
+                updated = _relax(value, nested = mode, root = root)
+                if updated is not value:
+                    if relaxed is None:
+                        relaxed = list(children)
+                    relaxed[index] = updated
+            if relaxed is not None:
                 out = {**out, keyword: relaxed}
     if nested and _reorderable(out, root):
         return _wrap(out)
@@ -182,15 +192,13 @@ def unrelaxed(schema: Any) -> Any:
 def llama_grammar_tools(tools: Any) -> Any:
     if not isinstance(tools, list):
         return tools
-    out = []
-    changed = False
-    for tool in tools:
+    out = None
+    for index, tool in enumerate(tools):
         function = tool.get("function") if isinstance(tool, dict) else None
         parameters = function.get("parameters") if isinstance(function, dict) else None
         relaxed = relax_nested_object_key_order(parameters)
-        if relaxed is parameters:
-            out.append(tool)
-            continue
-        out.append({**tool, "function": {**function, "parameters": relaxed}})
-        changed = True
-    return out if changed else tools
+        if relaxed is not parameters:
+            if out is None:
+                out = list(tools)
+            out[index] = {**tool, "function": {**function, "parameters": relaxed}}
+    return tools if out is None else out

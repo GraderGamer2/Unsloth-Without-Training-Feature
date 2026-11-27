@@ -1065,3 +1065,18 @@ test("the animation-free plugin list keeps its identity across Streamdown's rebu
   const different = [other] as never;
   assert.notEqual(withoutStreamdownAnimationPlugin(different, animatePlugin), first, "a different list is a different identity");
 });
+
+
+test("document-scope cache follows the actual markdown, including alternating replies", () => {
+  const referenced = "Read [docs][r].\n\n[r]: https://example.com";
+  const plain = "A plain reply without references.";
+  const other = "Read [other][x].\n\n[x]: https://example.org";
+  for (let i = 0; i < 50; i += 1) {
+    assert.equal(markdownRenderScope(referenced), "document");
+    assert.deepEqual(parseMarkdownIntoRenderableBlocks(referenced), [referenced]);
+    assert.equal(markdownRenderScope(plain), "blocks");
+    assert.equal(markdownRenderKey(plain), "blocks");
+    assert.equal(markdownRenderScope(other), "document");
+    assert.notEqual(markdownRenderKey(other), markdownRenderKey(referenced));
+  }
+});

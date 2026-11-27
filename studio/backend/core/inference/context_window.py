@@ -597,6 +597,7 @@ def compact_refused_tool_arguments(messages: list[dict], call_id: str) -> list[d
 def _last_index_with_call(messages: list[dict], call_id: str) -> int:
     """Call ids are NOT unique: parsers number from `call_0` each turn, so rewriting every match
     relabels an earlier call's fate. Callers act on the call just decided, so take the last."""
+    target = str(call_id)
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if message.get("role") != "assistant":
@@ -605,15 +606,16 @@ def _last_index_with_call(messages: list[dict], call_id: str) -> int:
         if not isinstance(calls, list):
             continue
         if any(
-            isinstance(call, dict) and str(call.get("id") or "") == str(call_id) for call in calls
+            isinstance(call, dict) and str(call.get("id") or "") == target for call in calls
         ):
             return index
     return -1
 
 
 def _reply_for_call(messages: list[dict], call_id: str) -> object:
+    target = str(call_id)
     for message in reversed(messages):
-        if message.get("role") == "tool" and str(message.get("tool_call_id") or "") == str(call_id):
+        if message.get("role") == "tool" and str(message.get("tool_call_id") or "") == target:
             return message.get("content")
     return None
 

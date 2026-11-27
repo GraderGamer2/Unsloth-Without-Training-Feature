@@ -140,10 +140,10 @@ def _merge(
         stripped = raw.strip()
         if not stripped:
             return
-        lead = len(raw) - len(raw.lstrip())
-        trail = len(raw) - len(raw.rstrip())
+        # The stripped length gives the end without a second trimmed string.
+        lead = len(raw) - len(raw.lstrip()) if raw[0].isspace() else 0
         start = buf_starts[0] + lead
-        end = buf_starts[0] + len(raw) - trail
+        end = start + len(stripped)
         chunks.append((stripped, start, end))
 
     for piece, start in zip(pieces, starts):
@@ -196,7 +196,10 @@ def chunk_pages(
         for text, char_start, char_end in _merge(pieces, starts, max_tokens, overlap):
             token_count = -1 if batched else count(text)
             overlap_chars = min(len(text), max(0, previous_end - char_start))
-            unique_text = text[overlap_chars:].lstrip("\r\n")
+            unique_text = (
+                text if overlap_chars == 0 and not text.startswith(("\r", "\n"))
+                else text[overlap_chars:].lstrip("\r\n")
+            )
             if unique_text == text:
                 whole = token_count
             elif batched:

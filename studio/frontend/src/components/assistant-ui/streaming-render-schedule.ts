@@ -218,23 +218,27 @@ const HTML_TAG_START_RE = /[a-zA-Z/]/;
 // One memo slot: markdown-text.tsx asks for the key, then Streamdown splits the same string.
 let splitMarkdown: string | null = null;
 let splitBlocks: readonly string[] = [];
-let splitReferenceProse = "";
+let splitReferenceParts: readonly string[] = [];
+let splitReferenceProse: string | null = null;
 let splitDefinitions: readonly string[] = [];
+let splitDocumentProse: string | null | undefined;
 
 function blocksOf(markdown: string): readonly string[] {
   if (splitMarkdown !== markdown) {
-    splitMarkdown = markdown;
     const details = parseMarkdownBlockDetails(markdown);
     splitBlocks = details.blocks;
-    splitReferenceProse = details.referenceProse.join("\n\n");
+    splitReferenceParts = details.referenceProse;
+    splitReferenceProse = null;
     splitDefinitions = details.definitions;
+    splitDocumentProse = undefined;
+    splitMarkdown = markdown;
   }
   return splitBlocks;
 }
 
 function referenceProseOf(markdown: string): string {
   blocksOf(markdown);
-  return splitReferenceProse;
+  return (splitReferenceProse ??= splitReferenceParts.join("\n\n"));
 }
 
 function definitionsOf(markdown: string): readonly string[] {
@@ -266,6 +270,16 @@ function definitionsOf(markdown: string): readonly string[] {
 // a normalised copy misses it and costs a CRLF reply two splits per render.
 // A shortcut reference can be any `[label]`, so a definition alone is enough to pay for the split.
 function documentProse(markdown: string): string | null {
+  if (splitMarkdown === markdown && splitDocumentProse !== undefined) {
+    return splitDocumentProse;
+  }
+  const result = computeDocumentProse(markdown);
+  // Only cache against the existing block memo; ordinary prose still avoids lexing.
+  if (splitMarkdown === markdown) splitDocumentProse = result;
+  return result;
+}
+
+function computeDocumentProse(markdown: string): string | null {
   if (!hasLinkDefinition(normalizeLineEndings(markdown))) {
     return null;
   }

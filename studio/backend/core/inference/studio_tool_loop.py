@@ -1095,14 +1095,20 @@ class _Turn:
             kept.append((index, call))
         ordered = kept
         # Reserve provider ids first so minted card ids never collide; reserve only calls _normalized_call keeps, or released ids put the client out of step.
-        painted.update(
-            call["id"]
-            for _, call in ordered
-            if isinstance(call.get("id"), str) and call["id"] and _normalized_call(call) is not None
-        )
+        # Reuse normalized provider calls instead of decoding large arguments twice.
+        prepared: dict[int, dict[str, Any] | None] = {}
+        for position, (_, call) in enumerate(ordered):
+            if isinstance(call.get("id"), str) and call["id"]:
+                normalized = _normalized_call(call)
+                prepared[position] = normalized
+                if normalized is not None:
+                    painted.add(call["id"])
         for position, (index, call) in enumerate(ordered + [(None, call) for call in self.healed]):
             streamed_id = call.get("id")
-            normalized = _normalized_call(call, fallback_id = f"call_{self.round}_{position}")
+            normalized = (
+                prepared.pop(position) if position in prepared
+                else _normalized_call(call, fallback_id = f"call_{self.round}_{position}")
+            )
             if normalized is None:
                 continue
             if not (isinstance(streamed_id, str) and streamed_id):

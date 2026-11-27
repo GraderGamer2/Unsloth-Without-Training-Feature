@@ -9,6 +9,7 @@ import weakref
 from core.training.account_jobs import account_is_retired, account_key, job_accounts
 from utils.account_context import arun_as, current_account, run_as
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -252,7 +253,8 @@ def _clean_scraped_text(text: str) -> str:
         if not stripped:
             kept.append("")
             continue
-        if len(_PERCENT_ESCAPE.findall(stripped)) >= 4:
+        # Only the first four escapes matter; avoid allocating every match.
+        if sum(1 for _ in itertools.islice(_PERCENT_ESCAPE.finditer(stripped), 4)) >= 4:
             continue
         if _LONG_TOKEN.search(stripped):
             continue
