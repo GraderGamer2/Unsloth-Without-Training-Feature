@@ -205,10 +205,10 @@ def _decode_with_token_sets(tokenizer, token_ids, special_ids, tool_ids) -> str:
     token_ids = _as_id_sequence(token_ids)
     if not special_ids:
         return _decode_without_special_spacing(tokenizer, token_ids, skip_special_tokens = True)
+    # Convert each scalar once; avoid constructing a set on every decode call.
     filtered = [
-        int(token_id)
-        for token_id in token_ids
-        if int(token_id) not in special_ids or int(token_id) in tool_ids
+        token_id for token_id in map(int, token_ids)
+        if token_id not in special_ids or token_id in tool_ids
     ]
     return _decode_without_special_spacing(tokenizer, filtered, skip_special_tokens = False)
 

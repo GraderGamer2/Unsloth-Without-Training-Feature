@@ -44,7 +44,16 @@ class LocationListing:
 
     def dirs_holding(self, *names: str) -> list[Path]:
         first, *rest = (self.file_dirs.get(name.lower(), ()) for name in names)
-        return [directory for directory in first if all(directory in other for other in rest)]
+        if not rest:
+            return list(first)
+        if not first or any(not other for other in rest):
+            return []
+        # Common filenames can occur in thousands of model directories.
+        # Keep the first filename's order and multiplicity, but avoid repeated tuple scans.
+        if len(first) == 1:
+            return [directory for directory in first if all(directory in other for other in rest)]
+        others = tuple(set(other) for other in rest)
+        return [directory for directory in first if all(directory in other for other in others)]
 
 
 def account_scope() -> str:
@@ -59,16 +68,21 @@ def account_scope() -> str:
 def _memo_get(memo: dict, key):
     with _location_lock:
         entry = memo.get(key)
-        if entry is not None and time.monotonic() - entry[0] < _LOCATION_TTL_SECONDS:
-            return entry[1]
+        if entry is not None:
+            if time.monotonic() - entry[0] < _LOCATION_TTL_SECONDS:
+                memo.pop(key)
+                memo[key] = entry
+                return entry[1]
+            memo.pop(key)
     return None
 
 
 def _memo_put(memo: dict, key, value) -> None:
     with _location_lock:
-        if len(memo) >= _LOCATION_MEMO_MAX:
-            memo.clear()
+        memo.pop(key, None)
         memo[key] = (time.monotonic(), value)
+        while len(memo) > _LOCATION_MEMO_MAX:
+            memo.pop(next(iter(memo)))
 
 
 def _list_entries(directory: Path, limit: Optional[int]) -> list[os.DirEntry]:

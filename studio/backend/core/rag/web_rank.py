@@ -35,6 +35,26 @@ def _fit_to_budget(hits, rows, char_budget):
     return kept
 
 
+def _index_page_batch(conn, scope, model, pages, doc_ids):
+    """Embed complete pages together while retaining per-document identity and chunk order."""
+    if not pages:
+        return
+    texts = [chunk.text for _, _, chunks in pages for chunk in chunks]
+    vectors, identity = embeddings.encode_with_identity(texts, model_name = model, normalize = True)
+    if len(vectors) != len(texts):
+        raise ValueError("Embedding batch returned the wrong number of vectors")
+    offset = 0
+    for source, sha, chunks in pages:
+        end = offset + len(chunks)
+        doc_id = store.create_document(
+            conn, scope = scope, filename = source, sha256 = sha,
+            status = "ready", embedding_model = identity,
+        )
+        doc_ids.append(doc_id)
+        store.add_chunks(conn, scope, doc_id, chunks, vectors[offset:end])
+        offset = end
+
+
 def retrieve_web_chunks(
     pages: list[dict],
     query: str,
@@ -62,6 +82,11 @@ def retrieve_web_chunks(
     doc_ids: list[str] = []
     try:
         max_tokens = max_tokens or embeddings.chunk_tokens(model)
+        # Small pages share one encode request. Never split a page across vector
+        # spaces, and do not grow batches beyond the configured backend batch size.
+        batch_limit = max(1, min(64, config.EMBED_BATCH))
+        pending = []
+        pending_count = 0
         for page in pages:
             text = str(page.get("text") or "").strip()
             if not text:
@@ -75,20 +100,17 @@ def retrieve_web_chunks(
             )
             if not chunks:
                 continue
-            # Take identity from the encode that made these vectors; reading it later can label the wrong space.
-            vectors, identity = embeddings.encode_with_identity(
-                [chunk.text for chunk in chunks], model_name = model, normalize = True
-            )
-            doc_id = store.create_document(
-                conn,
-                scope = scope,
-                filename = source,
-                sha256 = hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest(),
-                status = "ready",
-                embedding_model = identity,
-            )
-            doc_ids.append(doc_id)
-            store.add_chunks(conn, scope, doc_id, chunks, vectors)
+            if pending and pending_count + len(chunks) > batch_limit:
+                _index_page_batch(conn, scope, model, pending, doc_ids)
+                pending = []
+                pending_count = 0
+            pending.append((source, hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest(), chunks))
+            pending_count += len(chunks)
+            if pending_count >= batch_limit:
+                _index_page_batch(conn, scope, model, pending, doc_ids)
+                pending = []
+                pending_count = 0
+        _index_page_batch(conn, scope, model, pending, doc_ids)
 
         if not doc_ids:
             return "", []

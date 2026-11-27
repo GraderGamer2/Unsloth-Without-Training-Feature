@@ -40,6 +40,14 @@ def _offline() -> bool:
         return True
 
 
+def _remember_hub(key, value) -> None:
+    # Caller holds _lock; pinned revisions and negative answers share the same bound.
+    _hub.pop(key, None)
+    _hub[key] = value
+    while len(_hub) > _MAX_ENTRIES:
+        _hub.pop(next(iter(_hub)))
+
+
 def hub_sha256s(
     repo_id: Optional[str],
     filenames: Iterable[str],
@@ -69,8 +77,10 @@ def hub_sha256s(
                 or (not pinned and now - hit[1] > _MUTABLE_TTL_S)
             ):
                 wanted.append(name)
-            elif hit[0]:
-                out[name] = hit[0]
+            else:
+                _remember_hub((repo_id, revision, name), hit)
+                if hit[0]:
+                    out[name] = hit[0]
     if not wanted:
         return out
     answered: dict = {}
@@ -87,13 +97,13 @@ def hub_sha256s(
     except Exception:  # noqa: BLE001 - offline, gated, rate limited: unverified, retried later
         with _lock:
             for name in wanted:
-                _hub[(repo_id, revision, name)] = (None, now)
+                _remember_hub((repo_id, revision, name), (None, now))
         return out
     with _lock:
         for name in wanted:
             sha = answered.get(name)
             # A listed non-LFS file is answered for good (""), a missing one retried after the TTL.
-            _hub[(repo_id, revision, name)] = (sha or None, now)
+            _remember_hub((repo_id, revision, name), (sha or None, now))
             if sha:
                 out[name] = sha
     return out
@@ -175,8 +185,11 @@ def file_sha256(path: str) -> Optional[str]:
         with open(real, "rb") as handle:
             if _file_identity(os.fstat(handle.fileno())) != identity:
                 return None
-            for chunk in iter(lambda: handle.read(_CHUNK), b""):
-                digest.update(chunk)
+            # Reuse one buffer rather than allocating an 8 MiB bytes object per read.
+            buffer = bytearray(min(_CHUNK, max(1, identity[0])))
+            view = memoryview(buffer)
+            while (length := handle.readinto(buffer)):
+                digest.update(view[:length])
             if _file_identity(os.fstat(handle.fileno())) != identity:
                 return None
         if _file_identity(os.stat(real)) != identity:

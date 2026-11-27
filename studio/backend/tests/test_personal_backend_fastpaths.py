@@ -691,5 +691,120 @@ class LifecycleTests(unittest.TestCase):
             self.assertLessEqual(len(state["_persisted"]), 2)
 
 
+class CacheAndBatchOptimizationTests(unittest.TestCase):
+    def test_hub_metadata_cache_bounded_and_reuses_recent_hits(self):
+        ns = runpy.run_path(str(BACKEND / "core/inference/cached_weight_sha.py"))
+        lookup = ns["hub_sha256s"]
+        state = lookup.__globals__
+        state["_MAX_ENTRIES"] = 3
+        state["_offline"] = lambda: False
+        requests = []
+        hub = ModuleType("huggingface_hub")
+        def paths(repo, names, **kwargs):
+            requests.append(tuple(names))
+            return [SimpleNamespace(path=name, lfs={"sha256": "a" * 64})
+                    for name in names if name != "missing"]
+        hub.HfApi = lambda: SimpleNamespace(get_paths_info=paths)
+        with patch.dict(sys.modules, {"huggingface_hub": hub}):
+            revision = "b" * 40
+            self.assertEqual(lookup("a/b", ["a", "b", "missing"], revision=revision),
+                             {"a": "a" * 64, "b": "a" * 64})
+            lookup("a/b", ["a", "missing"], revision=revision)
+            lookup("a/b", ["c"], revision=revision)
+            self.assertEqual(len(state["_hub"]), 3)
+            lookup("a/b", ["a", "missing"], revision=revision)
+            self.assertEqual(requests, [("a", "b", "missing"), ("c",)])
+            lookup("a/b", ["b"], revision=revision)
+            self.assertEqual(requests[-1], ("b",))
+            self.assertLessEqual(len(state["_hub"]), 3)
+
+    def test_weight_hash_buffer_boundaries(self):
+        import hashlib
+        ns = runpy.run_path(str(BACKEND / "core/inference/cached_weight_sha.py"))
+        digest = ns["file_sha256"]
+        state = digest.__globals__
+        state["_CHUNK"] = 7
+        state["_store_path"] = lambda: None
+        with tempfile.TemporaryDirectory() as tmp:
+            for length in (0, 1, 7, 8, 14, 15, 1003):
+                path = Path(tmp) / str(length)
+                data = bytes(i % 251 for i in range(length))
+                path.write_bytes(data)
+                self.assertEqual(digest(str(path)), hashlib.sha256(data).hexdigest())
+
+    def test_location_cache_preserves_order_and_evicts_only_oldest(self):
+        import threading
+        import time
+        loggers = ModuleType("loggers")
+        loggers.get_logger = lambda *_: SimpleNamespace()
+        with patch.dict(sys.modules, {"loggers": loggers}):
+            ns = runpy.run_path(str(BACKEND / "core/inference/model_cache_search.py"))
+        cls = ns["LocationListing"]
+        a, b, c = (Path("/" + name) for name in ("a", "b", "c"))
+        listing = cls({}, {"one": (c, a, b, a), "two": (a, c), "three": (a, b)})
+        self.assertEqual(listing.dirs_holding("ONE"), [c, a, b, a])
+        self.assertEqual(listing.dirs_holding("one", "two", "three"), [a, a])
+        self.assertEqual(listing.dirs_holding("one", "missing"), [])
+        put, get = ns["_memo_put"], ns["_memo_get"]
+        put.__globals__["_LOCATION_MEMO_MAX"] = 2
+        put.__globals__["_LOCATION_TTL_SECONDS"] = 100
+        memo = {}
+        put(memo, "a", 1)
+        put(memo, "b", 2)
+        self.assertEqual(get(memo, "a"), 1)
+        put(memo, "c", 3)
+        self.assertEqual(set(memo), {"a", "c"})
+
+    def test_tool_decode_filters_ids_without_changing_order(self):
+        ns = runpy.run_path(str(BACKEND / "core/inference/native_tool_tokens.py"))
+        decode = ns["_decode_with_token_sets"]
+        tokenizer = SimpleNamespace(decode=lambda ids, **kwargs: (list(ids), kwargs["skip_special_tokens"]))
+        self.assertEqual(decode(tokenizer, iter([1, 2, 3, 2, 4]), frozenset({2, 3}), frozenset({3})),
+                         ([1, 3, 4], False))
+        self.assertEqual(decode(tokenizer, 3, frozenset({2, 3}), frozenset({3})),
+                         ([3], False))
+        self.assertEqual(decode(tokenizer, [1, 2], frozenset(), frozenset()), ([1, 2], True))
+
+    def test_web_rank_batches_complete_pages_and_keeps_vector_identity(self):
+        import hashlib
+        import uuid
+        encodes, indexed, cleaned = [], [], []
+        def encode(texts, **kwargs):
+            encodes.append(list(texts))
+            return [("vector:" + text) for text in texts], "space-" + str(len(encodes))
+        docs = {}
+        def create(conn, **kwargs):
+            doc_id = str(len(docs))
+            docs[doc_id] = kwargs
+            return doc_id
+        def add(conn, scope, doc, chunks, vectors):
+            indexed.append((docs[doc]["filename"], docs[doc]["embedding_model"],
+                            [c.text for c in chunks], list(vectors)))
+        ns = source_defs("core/rag/web_rank.py", {"retrieve_web_chunks", "_index_page_batch"},
+                         globals_=dict(hashlib=hashlib, uuid=uuid,
+                           config=SimpleNamespace(EMBED_BATCH=4, CHUNK_OVERLAP=0,
+                                                  effective_embedding_model=lambda: "test"),
+                           embeddings=SimpleNamespace(token_counter=lambda m: len,
+                                                      chunk_tokens=lambda m: 16,
+                                                      encode_with_identity=encode),
+                           rag_db=SimpleNamespace(RAG_AVAILABLE=True, get_connection=lambda: object()),
+                           Page=SimpleNamespace,
+                           chunk_pages=lambda pages, **kw: [SimpleNamespace(text=t)
+                                                            for t in pages[0].text.split()],
+                           store=SimpleNamespace(create_document=create, add_chunks=add),
+                           retrieval=SimpleNamespace(retrieve_hybrid=lambda *a, **kw: []),
+                           logger=SimpleNamespace(warning=lambda *a, **kw: None),
+                           _cleanup_web_scope=lambda conn, ids: cleaned.extend(ids)))
+        pages = [{"title": str(i), "text": body}
+                 for i, body in enumerate(["a b", "c d", "e", "f g h i j", "k"])]
+        self.assertEqual(ns["retrieve_web_chunks"](pages, "q", top_n=3, min_score=0), ("", []))
+        self.assertEqual(encodes, [["a", "b", "c", "d"], ["e"], ["f", "g", "h", "i", "j"], ["k"]])
+        self.assertEqual([row[0] for row in indexed], ["0", "1", "2", "3", "4"])
+        self.assertEqual([row[1] for row in indexed], ["space-1", "space-1", "space-2", "space-3", "space-4"])
+        for _, _, chunks, vectors in indexed:
+            self.assertEqual(vectors, ["vector:" + chunk for chunk in chunks])
+        self.assertEqual(cleaned, ["0", "1", "2", "3", "4"])
+
+
 if __name__ == "__main__":
     unittest.main()
