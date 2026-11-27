@@ -376,29 +376,9 @@ LLAMA += [
     "        if (sz != 0) {\n            const size_t contiguous = std::min(sz, capacity - first);\n            result.insert(result.end(), data.begin() + first, data.begin() + first + contiguous);\n            result.insert(result.end(), data.begin(), data.begin() + (sz - contiguous));\n        }"
   ],
   [
-    "src/llama-kv-cache.cpp",
-    "llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {\n    llama_kv_cache::slot_info_vec_t res;",
-    "llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {\n    llama_kv_cache::slot_info_vec_t res;\n    res.reserve(ubatches.size());"
-  ],
-  [
-    "src/llama-kv-cache.cpp",
-    "    std::vector<state_t> states;\n\n    bool success = true;",
-    "    std::vector<state_t> states;\n    states.reserve(ubatches.size());\n\n    bool success = true;"
-  ],
-  [
-    "src/llama-kv-cache.cpp",
-    "            state_t state = { sinfo_new, v_heads, {} };\n\n            for (uint32_t s = 0; s < sinfo_new.n_stream(); ++s) {",
-    "            state_t state = { sinfo_new, v_heads, {} };\n            state.v_cells.reserve(sinfo_new.n_stream());\n\n            for (uint32_t s = 0; s < sinfo_new.n_stream(); ++s) {"
-  ],
-  [
     "src/llama-model-loader.cpp",
     "    for (int idx = 0; idx < n_split; ++idx) {\n        int ret = llama_split_path(buf.data(), buf.size(), split_prefix.c_str(), idx, n_split);\n        paths.push_back(std::string(buf.data(), ret));\n    }",
     "    if (n_split > 0) {\n        paths.reserve(n_split);\n    }\n    for (int idx = 0; idx < n_split; ++idx) {\n        int ret = llama_split_path(buf.data(), buf.size(), split_prefix.c_str(), idx, n_split);\n        paths.emplace_back(buf.data(), ret);\n    }"
-  ],
-  [
-    "tools/mtmd/mtmd-image.cpp",
-    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    for (const auto & img : imgs) {",
-    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    entries.reserve(entries.size() + imgs.size());\n    for (const auto & img : imgs) {"
   ]
 ]
 ENGINE_EXTRA["whisper"] += [
