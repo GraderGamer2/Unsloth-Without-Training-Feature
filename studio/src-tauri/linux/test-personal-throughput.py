@@ -100,6 +100,69 @@ class ThroughputTests(unittest.TestCase):
             self.assertEqual(before, after)
             self.assertEqual(sum(before), sum(after))
 
+    def test_adaptive_draft_limits_and_rollback_bound(self):
+        # Preserve replay, synthetic verification, configured minimum, and
+        # regular probes. Never select more than the existing context cap.
+        for cap in range(1, 33):
+            for minimum in range(1, 17):
+                for rounds in range(1, 33):
+                    for accepted, drafted in ((0, 64), (7, 100), (50, 100), (0, 8)):
+                        eligible = (drafted >= 64 and rounds >= 8 and rounds % 8 != 0
+                                    and accepted * 5 < drafted)
+                        result = min(cap, max(2, minimum)) if eligible else cap
+                        self.assertGreaterEqual(result, 1)
+                        self.assertLessEqual(result, cap)
+                        if eligible:
+                            self.assertGreaterEqual(result, min(cap, minimum))
+                        else:
+                            self.assertEqual(result, cap)
+            for capacity in range(0, 33):
+                needs_clone = cap > capacity
+                for rollback in range(cap + 1):
+                    if rollback > capacity:
+                        self.assertTrue(needs_clone)
+
+    def test_clipped_image_composite_order(self):
+        import random
+        rng = random.Random(7735)
+        for _ in range(3000):
+            sw, sh, dw, dh = (rng.randrange(1, 32) for _ in range(4))
+            ox, oy = (rng.randrange(-40, 41) for _ in range(2))
+            old = [(x, y, x + ox, y + oy) for y in range(sh) for x in range(sw)
+                   if 0 <= x + ox < dw and 0 <= y + oy < dh]
+            new = [(x, y, x + ox, y + oy)
+                   for y in range(max(0, -oy), min(sh, dh - oy))
+                   for x in range(max(0, -ox), min(sw, dw - ox))]
+            self.assertEqual(old, new)
+
+    def test_iq3_iq4_activation_slice(self):
+        for base in range(0, 128):
+            for cols in (1, 2, 4, 8):
+                nl = 4 if cols <= 4 else 2
+                for l0 in (0, 4 - nl):
+                    cached = [base + 2*l0 + k for k in range(2*nl)]
+                    for ll in range(nl):
+                        self.assertEqual(cached[2*ll:2*ll+2],
+                                         [base + 2*(l0+ll), base + 2*(l0+ll)+1])
+                cached = list(range(base, base+8))
+                for l in range(4):
+                    self.assertEqual((cached[l], cached[4+l]), (base+l, base+4+l))
+
+    def test_diffusion_truncation_equivalence(self):
+        for count in range(30):
+            for maximum in range(1, 40):
+                for bos in (0, 1):
+                    for eos in (0, 1):
+                        tokens = list(range(10, 10+count))
+                        def finish(items):
+                            result = ([1] if bos else []) + items + ([2] if eos else [])
+                            result = (result + [0] * maximum)[:maximum]
+                            if eos:
+                                result[-1] = 2
+                            return result
+                        take = min(count, max(0, maximum-bos))
+                        self.assertEqual(finish(tokens), finish(tokens[:take]))
+
     def test_ring_indices(self):
         for cap in range(1,65):
             for first in range(cap):

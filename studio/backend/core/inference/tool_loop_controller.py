@@ -1304,9 +1304,12 @@ class ToolLoopController:
         self._thread_id = thread_id
         self._restrict_to_allowed = tools is not None
         self._tools = [_copy_schema(dict(tool)) for tool in (tools or [])]
-        self._allowed_tool_names = {
+        # The prompt catalog is private and immutable after construction.
+        # Keep its names separate from dynamically discovered MCP tools.
+        self._declared_tool_names = frozenset(
             name for name in (_tool_name_from_schema(tool) for tool in self._tools) if name
-        }
+        )
+        self._allowed_tool_names = set(self._declared_tool_names)
         self._mcp_search = MCP_TOOL_SEARCH_NAME in self._allowed_tool_names
         if self._mcp_search:
             # Matched, searched or run MCP tools stay callable unlisted.
@@ -1359,8 +1362,7 @@ class ToolLoopController:
         active: list[dict[str, Any]] = []
         tools = self._tools
         if include_deferred and self._mcp_search:
-            declared = {_tool_name_from_schema(tool) for tool in tools}
-            deferred = sorted(self._allowed_tool_names - declared)
+            deferred = sorted(self._allowed_tool_names - self._declared_tool_names)
             specs = _mcp_tool_specs(deferred) if deferred else {}
             tools = tools + [specs[name] for name in deferred if name in specs]
         for tool in tools:
@@ -1396,7 +1398,7 @@ class ToolLoopController:
         if (
             self._mcp_search
             and tool_name.startswith(MCP_TOOL_PREFIX)
-            and tool_name not in {_tool_name_from_schema(tool) for tool in self._tools}
+            and tool_name not in self._declared_tool_names
         ):
             extra_schema = _mcp_tool_spec(tool_name)
             if extra_schema is not None:

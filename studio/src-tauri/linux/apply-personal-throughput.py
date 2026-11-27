@@ -224,11 +224,95 @@ LLAMA += [
 ]
 
 
+# Further pinned per-engine optimizations, separate from shared ggml patches.
+LLAMA += [
+  [
+    "tools/server/server-context.cpp",
+    "                const int n_draft_max = slot.get_n_draft_max();\n\n                if (n_draft_max > 0) {",
+    "                int n_draft_max = slot.get_n_draft_max();\n\n                // Limit only fresh drafts on sequential drafters that honor\n                // the cap before decoding. Replays and synthetic tests retain\n                // the original behavior. Probe the full length every 8 rounds.\n                const auto & types = params_base.speculative.types;\n                if (n_draft_max > 0 && slot.spec_draft.empty() &&\n                    types.size() == 1 &&\n                    (types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) &&\n                    common_speculative_get_synth_probs(spec.get()).empty() &&\n                    slot.stats.n_draft_tokens >= 64 &&\n                    slot.stats.n_draft_verif_steps >= 8 &&\n                    slot.stats.n_draft_verif_steps % 8 != 0 &&\n                    int64_t(slot.stats.n_draft_accepted) * 5 < slot.stats.n_draft_tokens) {\n                    n_draft_max = std::min(n_draft_max, std::max(2, params_base.speculative.draft.n_min));\n                }\n\n                if (n_draft_max > 0) {"
+  ],
+  [
+    "common/speculative.cpp",
+    "                if (params.n_max <= (int) result.size()) {\n                    drafting[seq_id] = false;\n                    n_drafting--;\n                    continue;\n                }\n\n                const int32_t idx = batch.add(id, pending_pos_last[seq_id] + (i + 1), seq_id, true);",
+    "                // Respect the server's cap before another draft decode.\n                // Below n_min, keep the original generate-then-truncate behavior.\n                if (params.n_max <= (int) result.size() ||\n                    (dp.n_max > 0 && dp.n_max >= params.n_min && dp.n_max <= (int) result.size())) {\n                    drafting[seq_id] = false;\n                    n_drafting--;\n                    continue;\n                }\n\n                const int32_t idx = batch.add(id, pending_pos_last[seq_id] + (i + 1), seq_id, true);"
+  ],
+  [
+    "common/speculative.cpp",
+    "                if (params.n_max <= (int) result.size()) {\n                    drafting[seq_id] = false;\n                    n_drafting--;\n                    continue;\n                }\n\n                if (chain_heads) {",
+    "                // Avoid producing draft tokens the server will discard.\n                if (params.n_max <= (int) result.size() ||\n                    (dp.n_max > 0 && dp.n_max >= params.n_min && dp.n_max <= (int) result.size())) {\n                    drafting[seq_id] = false;\n                    n_drafting--;\n                    continue;\n                }\n\n                if (chain_heads) {"
+  ],
+  [
+    "tools/server/server-context.cpp",
+    "                common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));\n\n                GGML_ASSERT(spec_i_batch.size() == n_draft + 1);",
+    "                // The saved sampler is only read when a rejected draft needs\n                // checkpoint replay. With removable KV, or enough recurrent\n                // rollback slots for the entire draft, that path is impossible.\n                common_sampler_ptr smpl_save;\n                if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||\n                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft > llama_n_rs_seq(ctx_tgt))) {\n                    smpl_save.reset(common_sampler_clone(slot.smpl.get()));\n                }\n\n                GGML_ASSERT(spec_i_batch.size() == n_draft + 1);"
+  ],
+  [
+    "tools/mtmd/mtmd-image.cpp",
+    "        const auto src_size = src.get_size();\n        const auto dst_size = dst.get_size();\n        for (int y = 0; y < src_size.height; ++y) {\n            for (int x = 0; x < src_size.width; ++x) {\n                int dx = x + offset_x;\n                int dy = y + offset_y;\n                // skip pixels that would be out of bounds in the destination\n                if (dx < 0 || dy < 0 || dx >= dst_size.width || dy >= dst_size.height) {\n                    continue;\n                }\n                dst.set_pixel(dx, dy, src.get_pixel(x, y));\n            }\n        }",
+    "        if (dst.is_placeholder()) {\n            return;\n        }\n        const auto src_size = src.get_size();\n        const auto dst_size = dst.get_size();\n        // Clip once, preserving the exact row-major copy order. Widen offset\n        // arithmetic so even extreme signed offsets cannot overflow.\n        const int64_t x0 = std::max<int64_t>(0, -int64_t(offset_x));\n        const int64_t y0 = std::max<int64_t>(0, -int64_t(offset_y));\n        const int64_t x1 = std::min<int64_t>(src_size.width, int64_t(dst_size.width) - offset_x);\n        const int64_t y1 = std::min<int64_t>(src_size.height, int64_t(dst_size.height) - offset_y);\n        if (x0 >= x1 || y0 >= y1) {\n            return;\n        }\n        for (int64_t y = y0; y < y1; ++y) {\n            for (int64_t x = x0; x < x1; ++x) {\n                dst.set_pixel(int(x + offset_x), int(y + offset_y), src.get_pixel(int(x), int(y)));\n            }\n        }"
+  ],
+  [
+    "tools/mtmd/mtmd-image.cpp",
+    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    for (const auto & img : imgs) {",
+    "void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {\n    // Reserve for the complete tile group before moving image buffers.\n    entries.reserve(entries.size() + imgs.size());\n    for (const auto & img : imgs) {"
+  ],
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq4_xs.comp",
+    "    const uint y_idx = i * QUANT_K + 32 * ib32;\n\n    uint ibi = a_offset + first_row * num_blocks_per_row + i;",
+    "    const uint y_idx = i * QUANT_K + 32 * ib32;\n\n    // Called only for valid superblocks. Reuse the activation slice across\n    // output rows during single-column decode; leave prefill unchanged.\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[8];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4;\n        [[unroll]] for (uint k = 0; k < 8; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n\n    uint ibi = a_offset + first_row * num_blocks_per_row + i;"
+  ],
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq4_xs.comp",
+    "                const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + l]);\n                const vec4 b1 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 4 + l]);",
+    "                const vec4 b0 = reuse_b ? cached_b[l] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + l]);\n                const vec4 b1 = reuse_b ? cached_b[4 + l] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 4 + l]);"
+  ],
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq3_s.comp",
+    "    const uint y_idx = i * QUANT_K + 32 * ib32;\n\n    uint ibi = a_offset + first_row * num_blocks_per_row + i;",
+    "    const uint y_idx = i * QUANT_K + 32 * ib32;\n\n    const bool reuse_b = NUM_COLS == 1 && NUM_ROWS > 1 && num_rows > 1;\n    vec4 cached_b[2 * NL];\n    if (reuse_b) {\n        const uint base_b = (b_offset + y_idx) / 4 + 2*l0;\n        [[unroll]] for (uint k = 0; k < 2 * NL; ++k) {\n            cached_b[k] = vec4(data_b_v4[base_b + k]);\n        }\n    }\n\n    uint ibi = a_offset + first_row * num_blocks_per_row + i;"
+  ],
+  [
+    "ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq3_s.comp",
+    "                const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);",
+    "                const vec4 b0 = reuse_b ? cached_b[2*ll] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);\n                const vec4 b4 = reuse_b ? cached_b[2*ll + 1] : vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 1]);"
+  ]
+]
+
+ENGINE_EXTRA = {
+    "whisper": [
+  [
+    "src/whisper.cpp",
+    "            float * dst = wstate.inp_mel.data();\n            memset(dst, 0, ggml_nbytes(mel));\n\n            const int i0 = std::min(mel_offset,           mel_inp.n_len);\n            const int i1 = std::min(mel_offset + 2*n_ctx, mel_inp.n_len);\n\n            for (int j = 0; j < mel_inp.n_mel; ++j) {\n                for (int i = i0; i < i1; ++i) {\n                    dst[j*2*n_ctx + (i - i0)] = mel_inp.data[j*mel_inp.n_len + i];\n                }\n            }",
+    "            float * dst = wstate.inp_mel.data();\n\n            const int i0 = std::min(mel_offset,           mel_inp.n_len);\n            const int i1 = std::min(mel_offset + 2*n_ctx, mel_inp.n_len);\n            const int n_copy = std::max(0, i1 - i0);\n            // Full windows overwrite the entire tensor; avoid zeroing it first.\n            if (n_copy != 2*n_ctx || int64_t(mel_inp.n_mel) * 2*n_ctx != ggml_nelements(mel)) {\n                memset(dst, 0, ggml_nbytes(mel));\n            }\n            if (n_copy > 0) {\n                for (int j = 0; j < mel_inp.n_mel; ++j) {\n                    std::copy_n(mel_inp.data.data() + size_t(j)*mel_inp.n_len + i0,\n                                n_copy, dst + size_t(j)*2*n_ctx);\n                }\n            }"
+  ]
+],
+    "diffusion": [
+  [
+    "src/tokenizers/tokenizer.cpp",
+    "    } else if (!allow_overflow_expand) {\n        build_sequence(0, tokens.size(), 0, new_tokens, new_weights, new_mask);\n\n        new_tokens.resize(max_length);",
+    "    } else if (!allow_overflow_expand) {\n        // Tokens beyond the truncation boundary cannot survive resize().\n        // Keep BOS accounting, and retain the existing final EOS replacement.\n        const size_t take = std::min(tokens.size(), max_length > bos_count ? max_length - bos_count : 0);\n        build_sequence(0, take, 0, new_tokens, new_weights, new_mask);\n\n        new_tokens.resize(max_length);"
+  ]
+],
+    "audio": [
+  [
+    "src/framework/audio/conversion.cpp",
+    "    return convert_wav_to_mono_linear_resampled(\n        WavData{sample_rate_hz, channel_count, interleaved_samples},\n        target_sample_rate_hz);",
+    "    // The temporary WavData copied the entire input before mixdown.\n    // Validate and operate on the original immutable sample vector instead.\n    if (sample_rate_hz <= 0 || target_sample_rate_hz <= 0) {\n        throw std::runtime_error(\"audio sample rates must be positive\");\n    }\n    auto mono = mixdown_interleaved_to_mono_average(interleaved_samples, channel_count);\n    if (sample_rate_hz != target_sample_rate_hz) {\n        mono = resample_mono_linear(mono, sample_rate_hz, target_sample_rate_hz);\n    }\n    return mono;"
+  ],
+  [
+    "src/framework/audio/waveform_ops.cpp",
+    "    if (peak > 1.0F) {\n        for (float & sample : samples) {\n            sample /= peak;\n        }\n    }\n    for (float & sample : samples) {\n        sample = std::clamp(sample, -1.0F, 1.0F);\n    }",
+    "    if (peak > 1.0F) {\n        // Keep the same floating-point division and clamp, in one pass.\n        for (float & sample : samples) {\n            sample /= peak;\n            sample = std::clamp(sample, -1.0F, 1.0F);\n        }\n    } else {\n        for (float & sample : samples) {\n            sample = std::clamp(sample, -1.0F, 1.0F);\n        }\n    }"
+  ]
+],
+}
+
+
 def patch_specs(component):
     if component not in ("llama", "diffusion", "whisper", "audio"):
         raise ValueError(component)
     root = "external/ggml/" if component == "audio" else "ggml/"
-    return [(root + p, a, b) for p, a, b in COMMON + (TERNARY if component in ("llama", "diffusion") else [])] + (LLAMA if component == "llama" else [])
+    return [(root + p, a, b) for p, a, b in COMMON + (TERNARY if component in ("llama", "diffusion") else [])] + (LLAMA if component == "llama" else ENGINE_EXTRA[component])
 
 def apply(component, source):
     originals, changes = {}, {}

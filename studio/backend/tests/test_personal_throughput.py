@@ -240,6 +240,33 @@ class ThroughputTests(unittest.TestCase):
         self.assertLess(len(compacted), len(args))
         self.assertIn("call already ran", compacted)
 
+    def test_declared_tool_names_remain_separate_from_mcp(self):
+        from types import SimpleNamespace
+        from collections.abc import Mapping, Sequence, Collection
+        ns = source_defs("core/inference/tool_loop_controller.py",
+                         {"_tool_name_from_schema", "_copy_schema"},
+                         globals_=dict(Any=Any, Mapping=Mapping, copy=__import__("copy"),
+                                       _SCHEMA_ATOMS=(str,int,float,bool,type(None))))
+        funcs = source_defs("core/inference/tool_loop_controller.py",
+                            {"__init__", "active_tools"}, class_name="ToolLoopController",
+                            globals_=dict(Any=Any, Mapping=Mapping, Sequence=Sequence,
+                                          Collection=Collection, _ONE_SHOT_TOOLS=frozenset(),
+                                          MCP_TOOL_SEARCH_NAME="mcp_search",
+                                          _mcp_tool_specs=lambda names: {
+                                              name: {"function":{"name":name}} for name in names},
+                                          _copy_schema=ns["_copy_schema"],
+                                          _tool_name_from_schema=ns["_tool_name_from_schema"]))
+        obj = SimpleNamespace()
+        tools = [{"function":{"name":"mcp_search"}}, {"function":{"name":"web_search"}}]
+        funcs["__init__"](obj, tools=tools, loaded_mcp_tools=("mcp_extra",))
+        self.assertEqual(obj._declared_tool_names, {"mcp_search", "web_search"})
+        self.assertIn("mcp_extra", obj._allowed_tool_names)
+        result = funcs["active_tools"](obj, include_deferred=True)
+        self.assertEqual([t["function"]["name"] for t in result],
+                         ["mcp_search", "web_search", "mcp_extra"])
+        result[0]["function"]["name"] = "changed"
+        self.assertEqual(funcs["active_tools"](obj)[0]["function"]["name"], "mcp_search")
+
     def test_mistral_parsed_object_reused(self):
         fn = source_defs("core/inference/tool_call_parser.py", {"_consume_mistral_call"},
                          globals_=dict(json=json, _loads_call_object=lambda s, **_: json.loads(s)))["_consume_mistral_call"]
