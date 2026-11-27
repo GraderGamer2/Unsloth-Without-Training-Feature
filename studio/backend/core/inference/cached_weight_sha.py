@@ -40,6 +40,14 @@ def _offline() -> bool:
         return True
 
 
+def _remember_hub(key, value) -> None:
+    # Caller holds _lock. Bound both successful and failed metadata lookups.
+    _hub.pop(key, None)
+    _hub[key] = value
+    while len(_hub) > _MAX_ENTRIES:
+        _hub.pop(next(iter(_hub)))
+
+
 def hub_sha256s(
     repo_id: Optional[str],
     filenames: Iterable[str],
@@ -87,13 +95,13 @@ def hub_sha256s(
     except Exception:  # noqa: BLE001 - offline, gated, rate limited: unverified, retried later
         with _lock:
             for name in wanted:
-                _hub[(repo_id, revision, name)] = (None, now)
+                _remember_hub((repo_id, revision, name), (None, now))
         return out
     with _lock:
         for name in wanted:
             sha = answered.get(name)
             # A listed non-LFS file is answered for good (""), a missing one retried after the TTL.
-            _hub[(repo_id, revision, name)] = (sha or None, now)
+            _remember_hub((repo_id, revision, name), (sha or None, now))
             if sha:
                 out[name] = sha
     return out

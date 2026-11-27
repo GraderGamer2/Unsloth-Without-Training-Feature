@@ -26,6 +26,9 @@ export interface RagDocument {
   linkedFolderId?: string | null;
   managed: boolean;
   createdAt?: string | null;
+  sourceUrl?: string | null;
+  sourcePartial?: boolean;
+  sourceEnabled?: boolean;
 }
 
 export function isLinkedFolderManaged(document: RagDocument): boolean {

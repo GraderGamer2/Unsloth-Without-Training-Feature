@@ -274,6 +274,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     # NULL for older archives falls back to created_at ordering; not backfilled, since created_at cannot recover order within a compaction epoch.
     if "archive_ordinal" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN archive_ordinal INTEGER")
+    # Optional, project-scoped provenance and selection. Existing documents
+    # remain selected and require no re-index or upload migration.
+    if "source_url" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_url TEXT")
+    if "source_partial" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_partial INTEGER NOT NULL DEFAULT 0")
+    if "source_enabled" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_enabled INTEGER NOT NULL DEFAULT 1")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_unselected ON documents(scope) WHERE source_enabled=0")
     chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
     if "page_char_start" not in chunk_cols:
         conn.execute("ALTER TABLE chunks ADD COLUMN page_char_start INTEGER")

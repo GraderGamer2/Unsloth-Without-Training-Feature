@@ -22,6 +22,8 @@ import type {
 } from "../types/rag";
 import { noteRagAvailability, noteRagResponse } from "./rag-availability";
 
+import type { GroundedPassage } from "./project-grounding";
+
 const RAG_BASE = "/api/rag";
 
 function parseErrorText(status: number, body: unknown): string {
@@ -254,6 +256,61 @@ export function uploadProjectDocument(
   );
 }
 
+export interface WebSourceCandidate {
+  url: string;
+  title: string;
+  snippet?: string | null;
+}
+
+export interface SourceWebsitePolicy {
+  allowedDomains: string[];
+  blockedDomains: string[];
+}
+
+export function discoverProjectSources(
+  projectId: string,
+  query: string,
+  websitePolicy: SourceWebsitePolicy,
+): Promise<{ sources: WebSourceCandidate[] }> {
+  return ragRequest(`/projects/${encodeURIComponent(projectId)}/discover-sources`, {
+    method: "POST",
+    body: { query, websitePolicy },
+  });
+}
+
+export async function importProjectWebSource(
+  projectId: string,
+  source: WebSourceCandidate,
+  websitePolicy: SourceWebsitePolicy,
+  researchRunId?: string,
+): Promise<DocumentUploadResult> {
+  invalidateProjectSources(projectId);
+  try {
+    return await ragRequest<DocumentUploadResult>(
+      `/projects/${encodeURIComponent(projectId)}/web-sources`,
+      { method: "POST", body: { url: source.url, title: source.title, websitePolicy, researchRunId } },
+    );
+  } finally {
+    announceProjectSourcesUpdated(projectId);
+  }
+}
+
+export async function setProjectSourceSelection(
+  projectId: string,
+  documentId: string,
+  enabled: boolean,
+): Promise<void> {
+  invalidateProjectSources(projectId);
+  try {
+    await ragRequest(`/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/selection`, {
+      method: "PATCH",
+      body: { enabled },
+    });
+  } finally {
+    announceProjectSourcesUpdated(projectId);
+  }
+}
+
 const projectSourcesCache = new Map<string, { has: boolean; at: number }>();
 const PROJECT_SOURCES_TTL_MS = 30_000;
 
@@ -264,8 +321,13 @@ export async function projectHasSources(projectId: string): Promise<boolean> {
   }
   try {
     const docs = await listProjectDocuments(projectId);
-    const has = docs.some((doc) => doc.status !== "failed");
+    const has = docs.some((doc) => doc.status !== "failed" && doc.sourceEnabled !== false);
+    projectSourcesCache.delete(projectId);
     projectSourcesCache.set(projectId, { has, at: Date.now() });
+    if (projectSourcesCache.size > 256) {
+      const oldest = projectSourcesCache.keys().next().value;
+      if (oldest !== undefined) projectSourcesCache.delete(oldest);
+    }
     return has;
   } catch {
     return false;
@@ -793,4 +855,11 @@ export async function getDocumentFileUrl(documentId: string): Promise<string> {
     `/documents/${encodeURIComponent(documentId)}/file-url`,
   );
   return apiUrl(data.url);
+}
+
+export async function retrieveProjectEvidence(projectId: string, query: string, signal?: AbortSignal): Promise<GroundedPassage[]> {
+  const response = await ragRequest<{ results: GroundedPassage[] }>("/search", {
+    method: "POST", body: { project_id: projectId, query, top_k: 8, mode: "hybrid" }, signal,
+  });
+  return response.results ?? [];
 }

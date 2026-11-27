@@ -16,6 +16,7 @@ import re
 import secrets
 import sqlite3
 import time
+import threading
 import unicodedata
 import uuid
 from contextlib import contextmanager
@@ -240,6 +241,9 @@ def _doc_view(row: dict) -> dict:
         "linkedFolderId": row.get("linked_folder_id"),
         "managed": bool(row.get("linked_folder_id")),
         "createdAt": row.get("created_at"),
+        "sourceUrl": row.get("source_url"),
+        "sourcePartial": bool(row.get("source_partial")),
+        "sourceEnabled": bool(row.get("source_enabled", 1)),
     }
 
 
@@ -659,6 +663,150 @@ def upload_project_document(
         _discard_document(document_id)
         raise HTTPException(status_code = 404, detail = "Project not found")
     return {"documentId": document_id, "jobId": job_id, "filename": filename}
+
+
+# Limit only this new import path; the existing folder and document queues
+# keep their own batching policy. Never load the chat model for discovery.
+_WEB_SOURCE_FETCH_SLOTS = threading.BoundedSemaphore(2)
+_WEB_SOURCE_STAGE_SLOTS = threading.BoundedSemaphore(1)
+
+
+class ProjectSourceDiscovery(BaseModel):
+    query: str = Field(min_length = 1, max_length = 2000)
+    websitePolicy: dict | None = None
+
+
+class ProjectWebSource(BaseModel):
+    url: str = Field(min_length = 1, max_length = 4096)
+    title: str | None = Field(default = None, max_length = 200)
+    researchRunId: str | None = Field(default = None, max_length = 128)
+    websitePolicy: dict | None = None
+
+
+class ProjectSourceSelection(BaseModel):
+    enabled: bool
+
+
+def _source_website_policy(value):
+    from core.inference.web_access_policy import normalize_website_policy
+    from state.tool_policy import get_tool_policy
+
+    if get_tool_policy() is False:
+        raise HTTPException(status_code = 403, detail = "Tools are disabled on this server")
+    try:
+        return normalize_website_policy(value)
+    except ValueError as exc:
+        raise HTTPException(status_code = 400, detail = str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/discover-sources")
+def discover_project_sources(
+    project_id: str, payload: ProjectSourceDiscovery, subject: str = Depends(get_current_subject)
+) -> dict:
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    policy = _source_website_policy(payload.websitePolicy)
+    from core.rag.web_sources import discover_sources
+
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code = 400, detail = "Enter a source discovery query.")
+    try:
+        with _WEB_SOURCE_FETCH_SLOTS:
+            return {"sources": discover_sources(query, policy)}
+    except ValueError as exc:
+        raise HTTPException(status_code = 422, detail = str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/web-sources")
+def import_project_web_source(
+    project_id: str, payload: ProjectWebSource, subject: str = Depends(get_current_subject)
+) -> dict:
+    """Fetch evidence only on a deliberate user import. Do not persist snippets or reports as originals."""
+    from io import BytesIO
+    from core.rag import web_sources
+    from storage import research_runs_db
+    from storage.studio_db import get_chat_project, get_chat_thread
+
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    policy = _source_website_policy(payload.websitePolicy)
+    title = payload.title
+    url = payload.url
+    if payload.researchRunId:
+        run = research_runs_db.get_run(payload.researchRunId)
+        thread = get_chat_thread(run["threadId"]) if run else None
+        # The run and project are both resolved in the current account DB.
+        # An explicit target project is allowed even for non-project research.
+        if not run or not thread:
+            raise HTTPException(status_code = 404, detail = "Research run not found")
+        if run["status"] != "completed":
+            raise HTTPException(status_code = 409, detail = "Research must complete before importing its sources")
+        candidate = next((s for s in run.get("sources", []) if s.get("url") == url), None)
+        if candidate is None:
+            raise HTTPException(status_code = 400, detail = "URL is not a recorded research source")
+        title = candidate.get("title") or url
+        # Use the original research policy as well as the current caller's policy.
+        # The existing fetch tool enforces the resulting policy on redirects.
+        try:
+            policy = web_sources.intersect_policies(policy, run.get("config", {}).get("websitePolicy"))
+        except ValueError as exc:
+            raise HTTPException(status_code = 403, detail = str(exc)) from exc
+    try:
+        url = web_sources.canonical_source_url(url, policy)
+        with _WEB_SOURCE_FETCH_SLOTS:
+            body = web_sources.fetch_source_text(url, policy)
+        title, markdown = web_sources.snapshot_markdown(url, title or url, body)
+    except ValueError as exc:
+        raise HTTPException(status_code = 422, detail = str(exc)) from exc
+
+    scope = store.project_scope(project_id)
+    filename = _document_label(title + " [web snapshot].md")
+    stored_path, filename, content_hash = _persist_upload_stream(
+        BytesIO(markdown.encode("utf-8")), filename, empty_detail = "No readable website content."
+    )
+    try:
+        with folder_sync.scope_lock(scope):
+            _require_scope_owner("project", project_id)
+            _raise_if_scope_retired(scope, "Project is being deleted")
+            with _rag_unavailable_as_503(stored_path):
+                document_id, job_id = ingestion.start_ingestion(
+                    scope, None, None, filename, stored_path,
+                    project_id = project_id, ocr = False, caption = False,
+                    content_hash = content_hash, source_url = url, source_partial = True,
+                    stage_slots = _WEB_SOURCE_STAGE_SLOTS,
+                )
+    except Exception:
+        _remove_stored_upload(stored_path)
+        raise
+    if get_chat_project(project_id) is None:
+        _discard_document(document_id)
+        raise HTTPException(status_code = 404, detail = "Project not found")
+    return {"documentId": document_id, "jobId": job_id, "filename": filename, "sourceUrl": url, "sourcePartial": True}
+
+
+@router.patch("/projects/{project_id}/documents/{document_id}/selection")
+def select_project_source(
+    project_id: str, document_id: str, payload: ProjectSourceSelection,
+    subject: str = Depends(get_current_subject),
+) -> dict:
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    scope = store.project_scope(project_id)
+    with folder_sync.scope_lock(scope):
+        _raise_if_scope_retired(scope, "Project is being deleted")
+        conn = _rag_connection()
+        try:
+            changed = conn.execute(
+                "UPDATE documents SET source_enabled=? WHERE id=? AND scope=? AND linked_folder_id IS NULL",
+                (int(payload.enabled), document_id, scope),
+            ).rowcount
+            if not changed:
+                raise HTTPException(status_code = 404, detail = "Selectable project source not found")
+            conn.commit()
+        finally:
+            conn.close()
+    return {"ok": True}
 
 
 @router.get("/projects/{project_id}/documents")
@@ -1277,6 +1425,13 @@ def search(payload: SearchRequest, subject: str = Depends(get_current_subject)) 
                 )
             scope = scopes[0] if len(scopes) == 1 else scopes
 
+        if payload.project_id and not payload.kb_id and not payload.thread_id:
+            # Empty/deselected projects need no query embedding or model startup.
+            if not conn.execute(
+                "SELECT 1 FROM documents WHERE scope=? AND source_enabled=1 AND status='completed' LIMIT 1",
+                (scope,),
+            ).fetchone():
+                return {"results": []}
         if payload.mode == "lexical":
             hits = retrieval.retrieve_lexical(conn, scope, payload.query, payload.top_k)
         elif payload.mode == "dense":
@@ -1300,6 +1455,8 @@ def search(payload: SearchRequest, subject: str = Depends(get_current_subject)) 
                     "page": r["page_number"],
                     "score": h.score,
                     "text": r["text"],
+                    "sourceUrl": r["source_url"],
+                    "sourcePartial": bool(r["source_partial"]),
                 }
             )
         return {"results": results}

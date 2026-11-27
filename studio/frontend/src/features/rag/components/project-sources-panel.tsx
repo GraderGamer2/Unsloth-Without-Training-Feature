@@ -11,11 +11,12 @@ import { cn } from "@/lib/utils";
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { FolderAddIcon } from "@/lib/folder-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   announceProjectSourcesUpdated,
   invalidateProjectSources,
   listProjectDocuments,
+  setProjectSourceSelection,
 } from "../api/rag-api";
 import { isLinkedFolderManaged } from "../types/rag";
 import { DocumentStatusChip } from "./document-status-chip";
@@ -37,8 +38,28 @@ import {
 } from "./use-rag-documents";
 import { useUploadQueue } from "./use-upload-queue";
 import { linkedFolderDocumentsSummary } from "./source-folder-copy";
+import { WebSourceCollector } from "./web-source-collector";
+import { getProjectSourceOnly, setProjectSourceOnly } from "../api/project-grounding";
 
-export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
+export function ProjectSourcesPanel({ projectId, compact = false }: { projectId: string; compact?: boolean }) {
+  const [sourceOnly, setSourceOnly] = useState(() => getProjectSourceOnly(projectId));
+  const [selecting, setSelecting] = useState<Set<string>>(() => new Set());
+  const toggleSource = async (id: string, enabled: boolean) => {
+    setSelecting((prev) => new Set(prev).add(id));
+    try {
+      await setProjectSourceSelection(projectId, id, enabled);
+    } catch (error) {
+      toast.error("Could not change source selection", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSelecting((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lister = useCallback(
     () => listProjectDocuments(projectId),
@@ -169,7 +190,19 @@ export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
   );
 
   return (
-    <div className="mt-8" ref={dropRef} {...dragHandlers}>
+    <div className={compact ? "space-y-3" : "mt-8"} ref={dropRef} {...dragHandlers}>
+      <label className="flex items-start gap-2 rounded-lg bg-muted/30 p-3 text-sm">
+        <input type="checkbox" className="mt-1" checked={sourceOnly} onChange={(event) => {
+          try {
+            setProjectSourceOnly(projectId, event.target.checked);
+            setSourceOnly(event.target.checked);
+          } catch {
+            toast.error("Could not save source-only preference");
+          }
+        }} />
+        <span>Source-only chat <span className="block text-xs text-muted-foreground">Use selected project evidence only. No chat tools or browsing; explicitly starting Deep Research overrides this mode. External models receive retrieved passages.</span></span>
+      </label>
+      <WebSourceCollector key={projectId} projectId={projectId} />
       <input
         ref={fileInputRef}
         type="file"
@@ -203,7 +236,7 @@ export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
             </p>
             <p className="max-w-sm text-sm text-muted-foreground">
               Add documents, spreadsheets, slides, e-books, email, text or code.
-              Every chat in this project can use them.
+              Every chat in this project can retrieve selected sources using the configured embedding model.
             </p>
           </div>
           <div className="mt-1 flex items-center gap-1">
@@ -279,19 +312,32 @@ export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
               );
             })}
             {groups.loose.map((doc) => (
-              <ProjectSourceChip
-                key={doc.id}
-                doc={doc}
-                onRemove={
-                  isLinkedFolderManaged(doc) ||
-                  (doc.id.startsWith("pending_") && doc.status !== "failed")
-                    ? undefined
-                    : () => void handleRemove(doc.id)
-                }
-                onRetry={
-                  canRetry(doc.id) ? () => handleRetry(doc.id) : undefined
-                }
-              />
+              <div key={doc.id} className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  aria-label={`Use ${doc.filename} in project retrieval`}
+                  title="Include this source in retrieval for every chat in this project"
+                  checked={doc.sourceEnabled !== false}
+                  disabled={doc.id.startsWith("pending_") || selecting.has(doc.id) || doc.status !== "completed"}
+                  onChange={(event) => void toggleSource(doc.id, event.target.checked)}
+                />
+                <ProjectSourceChip
+                  doc={doc}
+                  onRemove={
+                    isLinkedFolderManaged(doc) ||
+                    (doc.id.startsWith("pending_") && doc.status !== "failed")
+                      ? undefined
+                      : () => void handleRemove(doc.id)
+                  }
+                  onRetry={canRetry(doc.id) ? () => handleRetry(doc.id) : undefined}
+                />
+                {doc.sourceUrl ? (
+                  <a href={doc.sourceUrl} target="_blank" rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground underline" title={doc.sourceUrl}>
+                    Original · extracted text
+                  </a>
+                ) : null}
+              </div>
             ))}
           </div>
         </div>

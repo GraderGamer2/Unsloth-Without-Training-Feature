@@ -685,6 +685,7 @@ export interface OpenAIChatCompletionsRequest {
   thinking?: { type: "disabled" | "enabled" } | null;
   enable_tools?: boolean | null;
   enabled_tools?: string[];
+  tool_choice?: "none" | "auto" | "required";
   mcp_enabled?: boolean;
   mcp_image?: string;
   studio_tool_history?: boolean;

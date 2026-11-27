@@ -91,10 +91,7 @@ from utils.host_policy import (
 
 logger = get_logger(__name__)
 _served_context_lengths: dict[tuple[Any, Any], int] = {}
-_URL_BLOCK = re.compile(
-    r"Title:\s*(?P<title>[^\n]*)\nURL:\s*(?P<url>https?://[^\s]+)\nSnippet:\s*(?P<snippet>.*?)(?=\n\n---|\Z)",
-    re.DOTALL,
-)
+from core.rag.web_sources import URL_BLOCK as _URL_BLOCK
 _OPENAI_RESPONSES_FIXED_SAMPLING_MODEL = re.compile(
     r"^(?:gpt-6-astra(?:[-.]|$)|gpt-5(?:[-.]|$)|gpt-4\.5(?:[-.]|$)|"
     r"o\d+(?:[-.]|$)|codex-mini(?:[-.]|$))"

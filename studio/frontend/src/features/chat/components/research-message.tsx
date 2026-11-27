@@ -26,8 +26,11 @@ import { researchReplyOwnsRun } from "../utils/research-run-binding";
 import { researchCitation } from "../utils/research-citations";
 import { researchStatusLabel } from "./research-activity-panel";
 import { Tick02Icon } from "@/lib/tick-icon";
+import { ResearchSourceCollector } from "@/features/rag/components/web-source-collector";
+import { useChatProjectScope } from "../chat-project-scope";
 
 export function ResearchMessage(): ReactElement | null {
+  const projectId = useChatProjectScope();
   const metadata = useAuiState(
     ({ message }) =>
       (message.metadata as { custom?: ResearchMessageMetadata } | undefined)
@@ -129,6 +132,9 @@ export function ResearchMessage(): ReactElement | null {
           defer={true}
         />
         <SourcesGroup sources={sources} allowRemoteIcons={false} />
+        {!failed && run.sources.length > 0 ? (
+          <ResearchSourceCollector key={run.id} run={run} defaultProjectId={projectId} />
+        ) : null}
         <DocumentSourcesGroup sources={documentSources} />
         <DocumentSourcesGroup sources={mcpSources} label="MCP Sources" />
       </div>

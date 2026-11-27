@@ -90,7 +90,8 @@ import { browserAgentToolsForTurn } from "@/features/browser/agent/tools";
 import { computerUseAsk } from "@/features/computer-use/summary";
 import { computerUseToolsForTurn } from "@/features/computer-use/tools";
 import { shownBrowserChat } from "@/features/browser/panel-availability";
-import { projectHasSources } from "@/features/rag/api/rag-api";
+import { projectHasSources, retrieveProjectEvidence } from "@/features/rag/api/rag-api";
+import { getProjectSourceOnly, packGroundedEvidence, finishGroundedAnswer, GROUNDED_INSTRUCTION } from "@/features/rag/api/project-grounding";
 import {
   IMAGE_SENTINEL_TOOLS,
   SANDBOX_FILE_TOOLS,
@@ -5099,9 +5100,9 @@ export function createOpenAIStreamAdapter(
         runtime.deepResearchEnabled &&
         !options.pairId &&
         (options.modelType === undefined || options.modelType === "base");
-      const browserTools = browserAgentToolsForTurn();
-      const computerTools = computerUseToolsForTurn();
-      const stepwiseTools = browserTools.length > 0 || computerTools.length > 0;
+      let browserTools = browserAgentToolsForTurn();
+      let computerTools = computerUseToolsForTurn();
+      let stepwiseTools = browserTools.length > 0 || computerTools.length > 0;
       const toolConfirmationIdsByBackendId = new Map<string, string>();
       // Local tool ids ("call_0") repeat across turns and panes, so scope by pane and thread
       // (unstable_threadId only, matching the reader's remoteId).
@@ -5268,7 +5269,7 @@ export function createOpenAIStreamAdapter(
       const toolConfirmationScopeId = resolvedThreadId
         ? `${sandboxSessionId || "_default"}:${resolvedThreadId}`
         : sandboxSessionId || "_default";
-      const {
+      let {
         supportsTools,
         toolsEnabled,
         imageToolsEnabled,
@@ -5284,7 +5285,7 @@ export function createOpenAIStreamAdapter(
         ragAutoInject,
         ragAutoInjectMinScore,
       } = runtime;
-      const codeToolsEnabled = codeToolsOn(runtime);
+      let codeToolsEnabled = codeToolsOn(runtime);
       if (
         deepResearchArmed &&
         !supportsTools &&
@@ -5302,7 +5303,14 @@ export function createOpenAIStreamAdapter(
         resolvedThreadId,
         readThreadRecord,
       );
-      const projectRagEnabled = ragProjectId
+      const sourceOnly = Boolean(ragProjectId && !deepResearchArmed && getProjectSourceOnly(ragProjectId));
+      if (sourceOnly) {
+        toolsEnabled = imageToolsEnabled = mcpEnabledForChat = webFetchToolsEnabled = ragEnabled = codeToolsEnabled = false;
+        browserTools = [];
+        computerTools = [];
+        stepwiseTools = false;
+      }
+      const projectRagEnabled = ragProjectId && !sourceOnly
         ? await projectHasSources(ragProjectId)
         : false;
       const externalSelection = parseExternalModelId(params.checkpoint);
@@ -5329,9 +5337,9 @@ export function createOpenAIStreamAdapter(
           externalSelection?.modelId,
         ) === true;
 
-      const supportsStudioToolsForThisTurn = isExternalRequest
+      const supportsStudioToolsForThisTurn = !sourceOnly && (isExternalRequest
         ? externalUsesStudioTools
-        : supportsTools;
+        : supportsTools);
       const selectedModelSummary = runtime.models.find(
         (model) => model.id === params.checkpoint,
       );
@@ -5705,6 +5713,35 @@ export function createOpenAIStreamAdapter(
         clearSelectedImageEditReference();
         throw new Error(reason);
       };
+      let groundedPassages: ReturnType<typeof packGroundedEvidence>["passages"] = [];
+      if (sourceOnly && ragProjectId) {
+        if (continuation || imageBase64 || audioBase64 || videoBase64 ||
+          selectedModelSummary?.isAudio || (!isExternalRequest && runtime.loadedIsDiffusion)) {
+          blockAttachmentRun("Source-only chat supports text questions. Turn it off for media or continuation.");
+        }
+        const questions = userTexts(outboundMessages);
+        const question = questions.at(-1)?.trim() ?? "";
+        if (!question) blockAttachmentRun("Enter a text question for your project sources.");
+        const windowSize = isExternalRequest ? 8192 : (runtime.loadedCustomContextLength || runtime.loadedContextLength || params.maxSeqLength || 4096);
+        if (new TextEncoder().encode(question).length > Math.max(512, Math.floor(windowSize / 2))) {
+          blockAttachmentRun("Question is too long for the source-only context budget.");
+        }
+        const query = question.slice(0, 6000);
+        const rows = await retrieveProjectEvidence(ragProjectId, query, abortSignal);
+        const packet = packGroundedEvidence(rows, windowSize, question);
+        groundedPassages = packet.passages;
+        if (!groundedPassages.length) {
+          yield { content: [{ type: "text" as const, text: "No selected indexed passages were available to answer this question. Add or select sources and wait for indexing to finish." }] };
+          return;
+        }
+        // Prior user questions can disambiguate follow-ups, but previous model
+        // answers, tool output and unrelated knowledge are not evidence.
+        const earlier = questions.slice(-3, -1).join("\n").slice(-Math.min(1000, Math.floor(windowSize / 4)));
+        outboundMessages = [
+          { role: "system", content: GROUNDED_INSTRUCTION },
+          { role: "user", content: "Earlier user questions (context only):\n" + earlier + "\n\nSelected evidence (JSON records):\n" + packet.evidence + "\n\nCurrent question:\n" + question },
+        ];
+      }
       // Block any image for a non-vision model; switching models requires a new chat.
       if (imageBase64) {
         const activeModel = runtime.models.find(
@@ -5861,7 +5898,7 @@ export function createOpenAIStreamAdapter(
         hasUserMessage: Boolean(generationUserMessage),
       });
       let generationDecision: "pending" | "durable" | "legacy" =
-        generationCandidate ? "pending" : "legacy";
+        generationCandidate && !sourceOnly ? "pending" : "legacy";
       let generationRun: ChatGenerationRun | null = null;
       let generationRunId: string | null = null;
       let generationSeq = 0;
@@ -6831,7 +6868,7 @@ export function createOpenAIStreamAdapter(
             // include every user turn because follow-ups still need skills mentioned earlier.
             await settleSkillsForText(userTexts(outboundMessages).join("\n"));
           }
-          const skillTools = skillToolNames(
+          const skillTools = sourceOnly ? [] : skillToolNames(
             skillsForTools(),
             codeToolsEnabled,
             userTexts(outboundMessages),
@@ -7305,7 +7342,10 @@ export function createOpenAIStreamAdapter(
               requestPayload = await buildRequestPayload(
                 retriedWithRefreshedKey,
               );
-              if (mcpImage) requestPayload = { ...requestPayload, mcp_image: mcpImage };
+              if (sourceOnly) {
+                requestPayload = { ...requestPayload, enable_tools: false, enabled_tools: [], tool_choice: "none", mcp_enabled: false };
+                delete requestPayload.rag_scope;
+              } else if (mcpImage) requestPayload = { ...requestPayload, mcp_image: mcpImage };
             } catch (error) {
               clearSelectedImageEditReference();
               throw error;
@@ -9139,7 +9179,9 @@ export function createOpenAIStreamAdapter(
 
         reasoningDurationTracker.finishGroup();
         const finalContent = [
-          ...buildAssistantContent(mergeContinuation(cumulativeText, { final: true })),
+          ...buildAssistantContent(sourceOnly
+            ? finishGroundedAnswer(mergeContinuation(cumulativeText, { final: true }), groundedPassages)
+            : mergeContinuation(cumulativeText, { final: true })),
           ...sourceParts,
           ...documentCitationParts,
         ];

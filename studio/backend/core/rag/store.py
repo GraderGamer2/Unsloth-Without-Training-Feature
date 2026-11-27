@@ -242,6 +242,9 @@ def create_document(
     archive_ordinal: int | None = None,
     created_at: str | None = None,
     rowid: int | None = None,
+    source_url: str | None = None,
+    source_partial: bool = False,
+    source_enabled: bool = True,
     commit: bool = True,
 ) -> str:
     """On a rewrite, carry created_at and rowid over so archived turns keep their place."""
@@ -249,8 +252,8 @@ def create_document(
     conn.execute(
         "INSERT INTO documents(rowid, id, scope, kb_id, thread_id, project_id, filename, sha256, "
         "status, stored_path, created_at, embedding_model, linked_folder_id, "
-        "linked_relative_path, archive_messages, archive_ordinal) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "linked_relative_path, archive_messages, archive_ordinal, source_url, source_partial, source_enabled) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             rowid,
             document_id,
@@ -268,6 +271,9 @@ def create_document(
             linked_relative_path,
             archive_messages,
             archive_ordinal,
+            source_url,
+            int(source_partial),
+            int(source_enabled),
         ),
     )
     if commit:
@@ -304,7 +310,7 @@ def set_document_embedding_model(
 def list_documents(conn: sqlite3.Connection, scope: str) -> list[dict]:
     rows = conn.execute(
         "SELECT id, scope, kb_id, thread_id, project_id, filename, sha256, status, error, "
-        "num_chunks, created_at, linked_folder_id "
+        "num_chunks, created_at, linked_folder_id, source_url, source_partial, source_enabled "
         "FROM documents d WHERE scope=? AND NOT EXISTS "
         "(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
         "ORDER BY created_at DESC",
@@ -317,7 +323,7 @@ def list_all_documents(conn: sqlite3.Connection) -> list[dict]:
     """Lists uploaded documents across scopes; archived turns are excluded, since no user uploaded them."""
     rows = conn.execute(
         "SELECT id, scope, kb_id, thread_id, project_id, filename, sha256, status, error, "
-        "num_chunks, stored_path, created_at, linked_folder_id "
+        "num_chunks, stored_path, created_at, linked_folder_id, source_url, source_partial, source_enabled "
         "FROM documents d WHERE NOT EXISTS "
         "(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
         "AND d.scope NOT LIKE 'convarchive#_%' ESCAPE '#' "
@@ -844,6 +850,15 @@ def search_lexical(
         scope_filter, scope_params = _lexical_scope_filter(conn, scopes, placeholders)
         if scope_filter is None:
             return []
+        # Only add the join to the ordinary fast path when this scope has a
+        # deselected source. Apply it before ranking/LIMIT, not after top-k.
+        if any(conn.execute(
+            "SELECT 1 FROM documents WHERE scope=? AND source_enabled=0 LIMIT 1", (s,)
+        ).fetchone() for s in scopes if s.startswith("project_")):
+            scope_filter += (
+                " AND EXISTS (SELECT 1 FROM chunks sc JOIN documents sd ON sd.id=sc.document_id"
+                " WHERE sc.id=chunks_fts.chunk_id AND sd.source_enabled=1)"
+            )
         # Subqueries run before LIMIT; skip them unless a folder is linked (linked_folder_rows_exist).
         if oldest_first:
             # Mirrors _conversation_order; uses document rowid since re-embeds rewrite chunk rows.
@@ -958,7 +973,7 @@ def _search_dense(conn: sqlite3.Connection, scope, vector, k: int, embedding_mod
                 embedding_model,
                 untagged,
             )
-            if len(kept[s]) < k and len(rows) >= fetch and not complete:
+            if len(kept[s]) < k and len(rows) >= min(fetch, cap) and not complete:
                 if fetch < cap:
                     fetches[s] = min(fetch * 4, cap)
                     widen.append(s)
@@ -999,7 +1014,7 @@ def _knn(conn, db_file, scope: str, vector, query: bytes, fetch: int):
 _ID_BATCH = 900
 
 _COMPATIBLE_CHUNKS = (
-    "NOT EXISTS (SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
+    "d.source_enabled=1 AND NOT EXISTS (SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
     "AND (d.linked_folder_id IS NULL OR EXISTS "
     "(SELECT 1 FROM linked_folder_files ff WHERE ff.document_id=d.id)) "
     "AND (? IS NULL OR d.embedding_model IS NULL OR d.embedding_model=? "
@@ -1067,6 +1082,7 @@ def chunks_by_id(conn: sqlite3.Connection, ids) -> dict:
     rows = conn.execute(
         f"SELECT c.id, c.text, c.document_id, c.chunk_index, c.page_number, "
         f"c.source_page_index, d.filename, d.archive_ordinal, d.created_at, "
+        f"d.source_url, d.source_partial, "
         f"d.rowid AS document_rowid "
         f"FROM chunks c JOIN documents d ON d.id=c.document_id "
         f"WHERE c.id IN ({placeholders}) AND NOT EXISTS "
@@ -1090,9 +1106,9 @@ def all_chunks_for_scope(conn: sqlite3.Connection, scope) -> list[dict]:
         f"SELECT c.id, c.text, c.document_id, c.chunk_index, c.page_number, "
         f"c.source_page_index, c.page_char_start, c.page_char_end, c.token_count, "
         f"c.whole_document_token_count, "
-        f"d.filename, d.created_at "
+        f"d.filename, d.created_at, d.source_url, d.source_partial "
         f"FROM chunks c JOIN documents d ON d.id=c.document_id "
-        f"WHERE c.scope IN ({placeholders}) AND d.status='completed' "
+        f"WHERE c.scope IN ({placeholders}) AND d.status='completed' AND d.source_enabled=1 "
         f"AND NOT EXISTS "
         f"(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
         f"AND (d.linked_folder_id IS NULL OR EXISTS "
@@ -1111,7 +1127,7 @@ def opening_chunks(
     max_chunks: int = 3,
 ) -> list[dict]:
     doc = conn.execute(
-        "SELECT id, filename FROM documents d WHERE scope=? AND id=? AND status='completed' "
+        "SELECT id, filename, source_url, source_partial FROM documents d WHERE scope=? AND id=? AND status='completed' AND source_enabled=1 "
         "AND num_chunks > 0 AND NOT EXISTS "
         "(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope)",
         (scope, document_id),
@@ -1126,7 +1142,7 @@ def opening_chunks(
         "FROM chunks WHERE document_id=? ORDER BY chunk_index LIMIT ?",
         (doc["id"], max_chunks),
     ):
-        rows.append({**dict(r), "filename": doc["filename"]})
+        rows.append({**dict(r), "filename": doc["filename"], "source_url": doc["source_url"], "source_partial": doc["source_partial"]})
         total += r["token_count"] or max(1, len(r["text"] or "") // 4)
         if total >= min_tokens:
             break
@@ -1148,7 +1164,7 @@ def scope_token_estimate(conn: sqlite3.Connection, scope) -> int:
         f"WHEN c.token_count > 0 THEN c.token_count "
         f"ELSE MAX(1, length(COALESCE(c.text, '')) / 4) END), 0) AS total "
         f"FROM chunks c JOIN documents d ON d.id=c.document_id "
-        f"WHERE c.scope IN ({placeholders}) AND d.status='completed' "
+        f"WHERE c.scope IN ({placeholders}) AND d.status='completed' AND d.source_enabled=1 "
         f"AND NOT EXISTS "
         f"(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
         f"AND (d.linked_folder_id IS NULL OR EXISTS "

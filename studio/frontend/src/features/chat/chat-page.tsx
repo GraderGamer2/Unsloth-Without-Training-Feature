@@ -686,12 +686,15 @@ const ARTIFACT_SURFACE_POP_DELAY_MS = 150;
 
 const SingleContent = memo(function SingleContent({
   threadId,
+  projectId,
 }: {
   threadId?: string;
+  projectId?: string | null;
 }): ReactElement {
   const activeThreadId = useChatRuntimeStore((state) => state.activeThreadId);
   const isMobile = useIsMobile();
   const chatActive = useChatActive();
+  const [sourcesOpen, setSourcesOpen] = useState(!isMobile);
   // Compare keeps this view mounted but hidden, so the backgrounded copy leaves the prompt to SharedComposer.
   const pendingFixPrompt = useChatArtifactsStore(
     (state) => state.pendingFixPrompt,
@@ -961,11 +964,33 @@ const SingleContent = memo(function SingleContent({
         browserFullView && chatDock === "minimized" && "hidden",
       )}
     >
-      {/* A floating chat has no welcome screen, so its composer shows in a new chat too. */}
-      <Thread
-        hideWelcome={Boolean(threadId) || browserFullView}
-        targetThreadId={threadId}
-      />
+      {projectId && !browserFullView ? (
+        <div className="flex shrink-0 justify-end px-3 pt-1">
+          <button type="button" aria-expanded={sourcesOpen}
+            onClick={() => setSourcesOpen((value) => !value)}
+            className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted">
+            {sourcesOpen ? "Hide sources" : "Show sources"}
+          </button>
+        </div>
+      ) : null}
+      <div className={cn("flex min-h-0 min-w-0 flex-1 overflow-hidden", isMobile && "flex-col")}>
+        {projectId && sourcesOpen && chatActive && !browserFullView ? (
+          <aside className={cn("shrink-0 overflow-y-auto border-border/60 p-3",
+            isMobile ? "max-h-[40%] border-b" : "w-[min(22rem,38%)] border-r")}>
+            <div className="mb-3 text-sm font-semibold">Project sources</div>
+            <Suspense fallback={<p className="text-xs text-muted-foreground">Loading sources…</p>}>
+              <ProjectSourcesPanel key={projectId} projectId={projectId} compact />
+            </Suspense>
+          </aside>
+        ) : null}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {/* Keep the thread mounted when the source panel opens or closes. */}
+          <Thread
+            hideWelcome={Boolean(threadId) || browserFullView}
+            targetThreadId={threadId}
+          />
+        </div>
+      </div>
     </div>
   );
 
@@ -5297,7 +5322,7 @@ export function ChatPage({
                         <>
                           <TemporaryChatSaveBridge />
                           <ChatFilesBridge />
-                          <SingleContent threadId={baseView.threadId} />
+                          <SingleContent threadId={baseView.threadId} projectId={baseView.projectId} />
                         </>
                       )}
                     </NativeAttachmentOwnerScopeContext.Provider>

@@ -68,6 +68,7 @@ def retrieve_lexical(
     ]
 
 
+@embeddings.embedding_activity
 def retrieve_dense(
     conn: sqlite3.Connection,
     scope: str | list[str],

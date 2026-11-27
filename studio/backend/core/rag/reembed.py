@@ -141,6 +141,7 @@ def _reembed_document(job: _Job, doc: dict, model: str) -> bool:
     return swapped
 
 
+@embeddings.embedding_activity
 def _run(job: _Job) -> None:
     # Per model: a failed document is not retried; a refused one only once the row it read changes.
     failed: set[tuple[str, str]] = set()

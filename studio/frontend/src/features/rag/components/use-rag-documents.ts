@@ -291,7 +291,7 @@ export function useRagDocuments(
         // Merge server truth with local progress so a refresh mid-index keeps a
         // live "running %" chip. Failed docs hidden, except ones this session can retry.
         const rows = (await lister()).filter(
-          (row) => row.status !== "failed" || retryItems.current.has(row.id),
+          (row) => row.status !== "failed" || Boolean(row.sourceUrl) || retryItems.current.has(row.id),
         );
         if (refreshSeq.current !== requestId) return true;
         setDocuments((prev) => {
