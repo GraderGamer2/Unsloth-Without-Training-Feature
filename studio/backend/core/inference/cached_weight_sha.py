@@ -116,8 +116,12 @@ def _load_persisted() -> dict:
             if path is not None and path.is_file():
                 data = json.loads(path.read_text(encoding = "utf-8"))
                 if isinstance(data, dict):
+                    # Older size/mtime-only records cannot establish file identity.
                     _persisted = {
-                        k: v for k, v in data.items() if isinstance(v, list) and len(v) == 3
+                        k: v for k, v in list(data.items())[-_MAX_ENTRIES:]
+                        if isinstance(v, list) and len(v) == 6
+                        and all(type(v[i]) is int for i in (0, 1, 3, 4, 5))
+                        and isinstance(v[2], str) and len(v[2]) == 64
                     }
         except Exception:  # noqa: BLE001 - a bad record file is an empty one
             _persisted = {}
@@ -138,35 +142,55 @@ def _save_persisted(data: dict) -> None:
         pass
 
 
+def _file_identity(st) -> tuple[int, int, int, int, int]:
+    return (st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino, st.st_ctime_ns)
+
+
+def _remember_local(key, value) -> None:
+    _local.pop(key, None)
+    _local[key] = value
+    while len(_local) > _MAX_ENTRIES:
+        _local.pop(next(iter(_local)))
+
+
 def file_sha256(path: str) -> Optional[str]:
-    """The sha256 of ``path``'s bytes (symlinks followed), from the record when the size and mtime still match."""
+    """Hash bytes (following symlinks); reuse only a matching file identity."""
     try:
         real = os.path.realpath(path)
         st = os.stat(real)
     except OSError:
         return None
-    key = (real, int(st.st_size), int(st.st_mtime_ns))
+    identity = _file_identity(st)
+    key = (real, *identity)
     with _lock:
         hit = _local.get(key)
         if hit is not None:
             return hit
         rec = _load_persisted().get(real)
-        if rec and int(rec[0]) == key[1] and int(rec[1]) == key[2]:
-            _local[key] = str(rec[2])
-            return str(rec[2])
+        if rec and (rec[0], rec[1], *rec[3:]) == identity:
+            _remember_local(key, rec[2])
+            return rec[2]
     digest = hashlib.sha256()
     try:
         with open(real, "rb") as handle:
+            if _file_identity(os.fstat(handle.fileno())) != identity:
+                return None
             for chunk in iter(lambda: handle.read(_CHUNK), b""):
                 digest.update(chunk)
+            if _file_identity(os.fstat(handle.fileno())) != identity:
+                return None
+        if _file_identity(os.stat(real)) != identity:
+            return None
     except OSError:
         return None
     sha = digest.hexdigest()
     with _lock:
-        _local[key] = sha
+        _remember_local(key, sha)
         data = _load_persisted()
         data.pop(real, None)
-        data[real] = [key[1], key[2], sha]
+        data[real] = [identity[0], identity[1], sha, *identity[2:]]
+        while len(data) > _MAX_ENTRIES:
+            data.pop(next(iter(data)))
         _save_persisted(data)
     return sha
 

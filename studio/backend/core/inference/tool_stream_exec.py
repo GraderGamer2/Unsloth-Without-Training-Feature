@@ -164,31 +164,39 @@ def stream_tool_execution(
     # Caps at the producer so a fast worker cannot queue unboundedly behind a slow client; one char past the cap keeps the notice; result stays byte-identical.
     accepted_output_chars = 0
     accepted_output_lock = threading.Lock()
+    output_finished = False
 
     def _on_output(text: "str | dict") -> None:
         nonlocal accepted_output_chars
-        if isinstance(text, dict):
-            # A structured request for the client (a browser action), outside the text budget.
-            output_queue.put(dict(text))
-            return
-        if not text:
-            return
         with accepted_output_lock:
+            if output_finished:
+                return
+            if isinstance(text, dict):
+                # Structured browser actions are outside the text budget.
+                output_queue.put(dict(text))
+                return
+            if not text:
+                return
             remaining = TOOL_OUTPUT_STREAM_MAX_CHARS + 1 - accepted_output_chars
             if remaining <= 0:
                 return
             accepted = text[:remaining]
             accepted_output_chars += len(accepted)
-        output_queue.put(accepted)
+            # Enqueue in the same critical section as accounting so callbacks
+            # from different threads cannot overtake each other or completion.
+            output_queue.put(accepted)
 
     def _run() -> None:
+        nonlocal output_finished
         try:
             outcome["result"] = invoke(_on_output)
         except BaseException as exc:  # noqa: BLE001 - re-raised on the caller side
             outcome["error"] = exc
         finally:
             # Posted after the result or error is recorded; wakes the consumer at once so fast tools pay no poll latency.
-            output_queue.put(done_sentinel)
+            with accepted_output_lock:
+                output_finished = True
+                output_queue.put(done_sentinel)
 
     # The worker runs in the caller's context, so a tool started for one account cannot resolve another's roots.
     worker = threading.Thread(
@@ -322,6 +330,8 @@ def stream_tool_execution(
         # Only reached on early close by the consumer. Set cancel only here so the shared event is
         # never set under the next tool in a clean turn; re-raise (GeneratorExit must not be swallowed).
         abnormal_exit = True
+        with accepted_output_lock:
+            output_finished = True
         if cancel_event is not None:
             try:
                 cancel_event.set()

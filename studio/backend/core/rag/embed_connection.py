@@ -66,8 +66,9 @@ def _client_for(model_name: str):
         provider, model = resolve_connection_model(model_name)
         api_key = credential_secrets.get_provider_api_key(provider["id"]) or ""
         # Re-read: an edit landing between the two reads must not send the new key to the old URL.
-        again, _ = resolve_connection_model(model_name)
-        if all(provider.get(k) == again.get(k) for k in destination):
+        again, again_model = resolve_connection_model(model_name)
+        if (provider["id"] == again["id"] and model == again_model
+                and all(provider.get(k) == again.get(k) for k in destination)):
             break
     else:
         raise ConnectionEmbedderError(f"The connection for {model_name!r} is being edited; retry.")
@@ -136,7 +137,16 @@ class ConnectionEmbeddingBackend:
                 f"(HTTP {response.status_code}): {detail}"
             )
         try:
-            items = sorted(response.json()["data"], key = lambda d: d.get("index", 0))
+            items = response.json()["data"]
+            # Some compatible providers omit every index and return input order.
+            # When indices are supplied, require a complete permutation: duplicates
+            # or gaps would silently attach vectors to the wrong document chunks.
+            indices = [item.get("index") for item in items]
+            if any(index is not None for index in indices):
+                if (any(type(index) is not int for index in indices)
+                        or sorted(indices) != list(range(len(texts)))):
+                    raise ValueError("Invalid embedding indices")
+                items = sorted(items, key = lambda d: d["index"])
             rows = [item["embedding"] for item in items]
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise ConnectionEmbedderError(
@@ -163,9 +173,14 @@ class ConnectionEmbeddingBackend:
         batch = max(1, min(config.EMBED_BATCH, _MAX_BATCH))
         for start in range(0, len(texts), batch):
             rows.extend(self._post(name, texts[start : start + batch]))
-        arr = np.asarray(rows, dtype = np.float32)
+        try:
+            arr = np.asarray(rows, dtype = np.float32)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ConnectionEmbedderError(f"Embeddings from {name!r} are not numeric vectors.") from exc
         if arr.ndim != 2 or arr.shape[1] == 0:
             raise ConnectionEmbedderError(f"Embeddings from {name!r} have shape {arr.shape}.")
+        if not np.isfinite(arr).all():
+            raise ConnectionEmbedderError(f"Embeddings from {name!r} contain non-finite values.")
         with self._lock:
             self._dims[name] = int(arr.shape[1])
         if normalize:

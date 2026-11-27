@@ -247,5 +247,153 @@ class FastPathsTest(unittest.TestCase):
         asyncio.run(check())
 
 
+class LifecycleTests(unittest.TestCase):
+    def test_response_close_error_still_closes_lines(self):
+        ns = runpy.run_path(str(BACKEND / "core/inference/http_stream.py"))
+        class Response:
+            closed = False
+            async def aiter_text(self):
+                try:
+                    yield "data: first\n"
+                    yield "data: second\n"
+                finally:
+                    self.closed = True
+            async def aclose(self):
+                raise OSError("close failed")
+        async def check():
+            response = Response()
+            lines = ns["closing_response_lines"](response)
+            self.assertEqual(await lines.__anext__(), "data: first")
+            with self.assertRaisesRegex(OSError, "close failed"):
+                await lines.aclose()
+            self.assertTrue(response.closed)
+        asyncio.run(check())
+
+    def test_task_cancellation_drains_pending_provider_read(self):
+        import contextlib
+        import threading
+        from collections.abc import AsyncIterator
+        path = BACKEND / "core/inference/external_tool_transport.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        watcher = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                       and n.name == "_await_cancel")
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                   and n.name == "OAICompatTransport")
+        cancel = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef)
+                      and n.name == "_cancellable")
+        cancel.decorator_list = []
+        ns = dict(asyncio=asyncio, contextlib=contextlib, threading=threading,
+                  AsyncIterator=AsyncIterator, _CANCEL_POLL_S=0.001)
+        exec(compile(ast.Module(body=[watcher, cancel], type_ignores=[]), str(path), "exec"), ns)
+
+        async def check():
+            waiting = asyncio.Event()
+            released = asyncio.Event()
+            async def provider():
+                try:
+                    waiting.set()
+                    await asyncio.Future()
+                    yield "unreachable"
+                finally:
+                    await asyncio.sleep(0)
+                    released.set()
+            async def consume():
+                async for _ in ns["_cancellable"](provider(), threading.Event()):
+                    pass
+            task = asyncio.create_task(consume())
+            await waiting.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(released.is_set())
+        asyncio.run(check())
+
+    def test_late_tool_output_is_not_retained_after_completion(self):
+        import queue
+        loggers = ModuleType("loggers")
+        loggers.get_logger = lambda name: SimpleNamespace()
+        controller = ModuleType("core.inference.tool_loop_controller")
+        controller.redact_studio_credentials = lambda text: text
+        original_queue = queue.Queue
+        enqueued = []
+        callbacks = []
+
+        class RecordingQueue(original_queue):
+            def put(self, item, *args, **kwargs):
+                enqueued.append(item)
+                return super().put(item, *args, **kwargs)
+
+        def invoke(callback):
+            callbacks.append(callback)
+            callback("first output!")
+            return "result"
+
+        with patch.dict(sys.modules, {"loggers": loggers,
+                                      "core.inference.tool_loop_controller": controller}):
+            ns = runpy.run_path(str(BACKEND / "core/inference/tool_stream_exec.py"))
+            with patch.object(queue, "Queue", RecordingQueue):
+                events = list(ns["stream_tool_execution"](invoke, tool_name="test"))
+                self.assertEqual("".join(e.get("text", "") for e in events), "first output!")
+                before = len(enqueued)
+                callbacks[0]("late text")
+                callbacks[0]({"browser": "late action"})
+                self.assertEqual(len(enqueued), before)
+
+    def test_remote_embedding_indices_are_complete_and_ordered(self):
+        external = ModuleType("core.inference.external_provider")
+        external._append_provider_path = lambda base, path: base + "/" + path
+        client = SimpleNamespace(base_url="http://example.invalid",
+                                 set_header_context=lambda *_: None,
+                                 _auth_headers=lambda: {})
+        ns = source_defs("core/rag/embed_connection.py",
+                         {"ConnectionEmbeddingBackend", "ConnectionEmbedderError"},
+                         globals_=dict(_ATTEMPTS=1,
+                                       _RETRY_STATUSES=frozenset(),
+                                       _client_for=lambda _: (client, {"id": "test"}, "model")))
+        backend = ns["ConnectionEmbeddingBackend"].__new__(ns["ConnectionEmbeddingBackend"])
+        backend._attempts = 1
+
+        def post(data):
+            backend._http = SimpleNamespace(post=lambda *a, **k:
+                SimpleNamespace(status_code=200, json=lambda: {"data": data}))
+            return backend._post("model", ["a", "b"])
+
+        with patch.dict(sys.modules, {"core.inference.external_provider": external}):
+            self.assertEqual(post([{"index": 1, "embedding": [2]},
+                                   {"index": 0, "embedding": [1]}]), [[1], [2]])
+            self.assertEqual(post([{"embedding": [1]}, {"embedding": [2]}]), [[1], [2]])
+            for indices in ((0, 0), (0, 2), (0, None), (False, 1)):
+                with self.assertRaises(ns["ConnectionEmbedderError"]):
+                    post([{"index": i, "embedding": [n]} for n, i in enumerate(indices)])
+
+    def test_hash_cache_rejects_replaced_file_with_same_size_and_mtime(self):
+        import hashlib
+        ns = runpy.run_path(str(BACKEND / "core/inference/cached_weight_sha.py"))
+        digest = ns["file_sha256"]
+        state = digest.__globals__
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "weights.bin"
+            record = Path(tmp) / "hashes.json"
+            state["_store_path"] = lambda: record
+            path.write_bytes(b"aaaa")
+            original = path.stat()
+            self.assertEqual(digest(str(path)), hashlib.sha256(b"aaaa").hexdigest())
+            state["_local"].clear()
+            state["_persisted"] = None
+            self.assertEqual(digest(str(path)), hashlib.sha256(b"aaaa").hexdigest())
+            replacement = Path(tmp) / "replacement.bin"
+            replacement.write_bytes(b"bbbb")
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            replacement.replace(path)
+            self.assertEqual(digest(str(path)), hashlib.sha256(b"bbbb").hexdigest())
+            state["_MAX_ENTRIES"] = 2
+            for index in range(4):
+                other = Path(tmp) / str(index)
+                other.write_bytes(bytes([index]))
+                self.assertIsNotNone(digest(str(other)))
+            self.assertLessEqual(len(state["_local"]), 2)
+            self.assertLessEqual(len(state["_persisted"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

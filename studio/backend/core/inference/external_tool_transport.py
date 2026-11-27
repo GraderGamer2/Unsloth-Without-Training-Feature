@@ -213,6 +213,10 @@ class OAICompatTransport:
                     await asyncio.wait({read, watcher}, return_when = asyncio.FIRST_COMPLETED)
                 except BaseException:
                     read.cancel()
+                    # Wait until the pending __anext__ unwinds before closing
+                    # its generator. Closing a running async generator fails.
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await read
                     raise
                 if not read.done():
                     read.cancel()
@@ -226,6 +230,8 @@ class OAICompatTransport:
                 yield line
         finally:
             watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
             # Teardown path: the route or loop closing this generator still reaches the provider stream here.
             aclose = getattr(upstream, "aclose", None)
             if aclose is not None:

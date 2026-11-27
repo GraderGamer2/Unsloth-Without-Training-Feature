@@ -77,5 +77,7 @@ async def closing_response_lines(response):
         async for line in lines:
             yield line
     finally:
-        await response.aclose()
-        await lines.aclose()
+        try:
+            await response.aclose()
+        finally:
+            await lines.aclose()
