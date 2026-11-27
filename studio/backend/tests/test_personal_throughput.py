@@ -240,6 +240,32 @@ class ThroughputTests(unittest.TestCase):
         self.assertLess(len(compacted), len(args))
         self.assertIn("call already ran", compacted)
 
+    def test_compaction_does_not_borrow_older_tool_reply(self):
+        import runpy
+        from pathlib import Path
+        ns = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                "core/inference/context_window.py"))
+        args = json.dumps({"path": "example.txt", "content": "x" * 12000})
+        def assistant(arguments=args):
+            return {"role": "assistant", "tool_calls": [
+                {"id": "call_0", "function": {"name": "edit_file", "arguments": arguments}}]}
+        earlier, latest = assistant(), assistant()
+        messages = [earlier, {"role": "tool", "tool_call_id": "call_0",
+                              "content": "File saved"}, latest]
+        compact = ns["compact_executed_call_arguments"]
+        result = compact(messages, "call_0")
+        receipt = result[2]["tool_calls"][0]["function"]["arguments"]
+        self.assertNotIn("already written", receipt)
+        self.assertIn("call already ran", receipt)
+        self.assertIs(result[0], earlier)
+        self.assertEqual(latest["tool_calls"][0]["function"]["arguments"], args)
+        for reply, written in (("Error: failed", False), ("File saved", True)):
+            answered = messages + [{"role": "tool", "tool_call_id": "call_0", "content": reply}]
+            receipt = compact(answered, "call_0")[2]["tool_calls"][0]["function"]["arguments"]
+            self.assertEqual("already written" in receipt, written)
+        short = [assistant(json.dumps({"path": "example.txt"}))]
+        self.assertIs(compact(short, "call_0"), short)
+
     def test_declared_tool_names_remain_separate_from_mcp(self):
         from types import SimpleNamespace
         from collections.abc import Mapping, Sequence, Collection

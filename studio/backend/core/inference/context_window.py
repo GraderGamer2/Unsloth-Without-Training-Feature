@@ -612,9 +612,17 @@ def _last_index_with_call(messages: list[dict], call_id: str) -> int:
     return -1
 
 
-def _reply_for_call(messages: list[dict], call_id: str) -> object:
+def _reply_for_call(
+    messages: list[dict], call_id: str, *, assistant_index: Optional[int] = None
+) -> object:
+    # IDs restart across turns; an older reply must never certify a newer call.
+    if assistant_index is None:
+        assistant_index = _last_index_with_call(messages, call_id)
+    if assistant_index < 0:
+        return None
     target = str(call_id)
-    for message in reversed(messages):
+    for index in range(len(messages) - 1, assistant_index, -1):
+        message = messages[index]
         if message.get("role") == "tool" and str(message.get("tool_call_id") or "") == target:
             return message.get("content")
     return None
@@ -632,13 +640,12 @@ def _compact_one_call(
     target = _last_index_with_call(messages, call_id)
     if target < 0:
         return messages
-    # Only the selected assistant message can change. Copy the outer list
-    # in C rather than walking every historical message in Python.
-    out = list(messages)
+    # Only the selected assistant message can change. Defer the outer list
+    # copy until an argument actually needs compaction.
     message = messages[target]
     calls = message.get("tool_calls")
     if not isinstance(calls, list) or not calls:
-        return out
+        return messages
     call_key = str(call_id)
     new_calls = None
     reply = None
@@ -647,8 +654,8 @@ def _compact_one_call(
         function = call.get("function") if isinstance(call, dict) else None
         if not isinstance(function, dict) or str(call.get("id") or "") != call_key:
             continue
-        if not reply_loaded:
-            reply = _reply_for_call(messages, call_id)
+        if phrase is None and not reply_loaded:
+            reply = _reply_for_call(messages, call_id, assistant_index = target)
             reply_loaded = True
         replacement = _compacted_arguments(
             str(function.get("name") or ""),
@@ -660,8 +667,10 @@ def _compact_one_call(
             if new_calls is None:
                 new_calls = list(calls)
             new_calls[index] = {**call, "function": {**function, "arguments": replacement}}
-    if new_calls is not None:
-        out[target] = {**message, "tool_calls": new_calls}
+    if new_calls is None:
+        return messages
+    out = list(messages)
+    out[target] = {**message, "tool_calls": new_calls}
     return out
 
 
