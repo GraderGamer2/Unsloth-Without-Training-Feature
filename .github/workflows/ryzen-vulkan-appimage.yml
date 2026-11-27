@@ -28,6 +28,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Trust only the checked-out repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
+
       - name: Install Linux build dependencies
         timeout-minutes: 15
         env:
@@ -183,6 +188,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Trust only the checked-out repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
+
       - name: Fingerprint runtime and toolchain
         id: native-key
         env:
@@ -314,6 +324,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Trust only the checked-out repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
@@ -524,6 +539,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Trust only the checked-out repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

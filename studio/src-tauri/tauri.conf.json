@@ -21,7 +21,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Unsloth",
+        "title": "Unsloth — GraderGamer2 (Unofficial)",
         "width": 760,
         "height": 560,
         "center": true,
@@ -53,8 +53,8 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "publisher": "Unsloth AI",
-    "homepage": "https://unsloth.ai/",
+    "publisher": "GraderGamer2",
+    "homepage": "https://github.com/GraderGamer2/Unsloth-Without-Training-Feature",
     "copyright": "© 2026 Unsloth AI. All rights reserved.",
     "license": "AGPL-3.0-only",
     "targets": ["app", "appimage", "deb", "dmg", "nsis"],

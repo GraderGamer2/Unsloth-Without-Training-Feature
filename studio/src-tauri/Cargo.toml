@@ -2,7 +2,7 @@
 name = "unsloth-studio"
 # Placeholder: release-desktop.yml rewrites this (and Cargo.lock) to the SemVer studio_version.
 version = "2026.4.8"
-description = "Unsloth Desktop App"
+description = "Unofficial inference-only fork maintained by GraderGamer2"
 authors = ["Unsloth AI"]
 edition = "2021"
 # std::fs::File::lock, used for the desktop ownership id.
