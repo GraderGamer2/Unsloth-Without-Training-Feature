@@ -102,6 +102,9 @@ async def generate(
     if cap <= 1 or n >= cap or seed is not None:
         return None
     loop = asyncio.get_running_loop()
+    # Futures belong to their creating event loop. Never join a batch owned
+    # by a different loop even if the request parameters are identical.
+    key = (loop, key)
     batch = _OPEN.get(key)
     if batch is not None:
         if batch.images + n > cap:
@@ -113,6 +116,13 @@ async def generate(
             return await member.future
         except _RunAlone:
             return None
+        except asyncio.CancelledError:
+            # Only the open batch can change membership. Once dispatched, its
+            # result slices must remain aligned with the original requests.
+            if _OPEN.get(key) is batch:
+                batch.members.remove(member)
+                batch.images -= n
+            raise
     if not busy():
         return None
 
@@ -128,7 +138,7 @@ async def generate(
                 _share(exc, batch.members[1:])
             raise
         _close(batch)
-        members = list(batch.members)
+        members = [member for member in batch.members if not member.future.cancelled()]
         if len(members) == 1:
             return None
         prompts = [member.prompt for member in members for _ in member.seeds]

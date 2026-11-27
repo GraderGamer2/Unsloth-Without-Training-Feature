@@ -23,24 +23,22 @@ _SECRET_PARTIAL_PREFIXES = tuple(
         reverse = True,
     )
 )
-# A prefix plus a generous token: bounds the reverse search on a multi-megabyte chunk.
-_SECRET_SCAN_TAIL = 128
 # What ends a credential token in tool output: whitespace, quoting and closing punctuation.
 _SECRET_TERMINATORS = frozenset(" \t\r\n\"'`,;)]}")
 
 
 def _hold_back_partial_secret(text: str) -> int:
     """Index where a credential token still open at the end of `text` begins; the tail is held back."""
-    tail_start = max(0, len(text) - _SECRET_SCAN_TAIL)
     best = len(text)
-    for prefix in _SECRET_PREFIXES:
-        index = text.rfind(prefix, tail_start)
-        while index != -1:
-            rest = text[index + len(prefix) :]
-            # A terminator anywhere after the token ends it, so the text is safe to emit.
-            if not rest or not _SECRET_TERMINATORS.intersection(rest):
+    if any(prefix in text for prefix in _SECRET_PREFIXES):
+        # The redactor accepts variable-length tokens; a fixed trailing window
+        # can mask the first chunk and expose the rest of a longer token.
+        # Live output is already bounded by TOOL_OUTPUT_STREAM_MAX_CHARS.
+        tail_start = max(text.rfind(char) for char in _SECRET_TERMINATORS) + 1
+        for prefix in _SECRET_PREFIXES:
+            index = text.find(prefix, tail_start)
+            if index != -1:
                 best = min(best, index)
-            index = text.rfind(prefix, tail_start, index)
     # Longest partial prefix yields the earliest index, as before.
     for prefix in _SECRET_PARTIAL_PREFIXES:
         if text.endswith(prefix):

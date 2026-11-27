@@ -50,11 +50,10 @@ def retrieve_web_chunks(
     query = (query or "").strip()
     if not query or top_n <= 0 or not pages or not rag_db.RAG_AVAILABLE:
         return "", []
-    model = model_name or config.effective_embedding_model()
-    overlap = config.CHUNK_OVERLAP if overlap is None else overlap
-    count = embeddings.token_counter(model)
-
     try:
+        model = model_name or config.effective_embedding_model()
+        overlap = config.CHUNK_OVERLAP if overlap is None else overlap
+        count = embeddings.token_counter(model)
         conn = rag_db.get_connection()
     except Exception:
         logger.warning("research.web_rank_failed", exc_info = True)
@@ -105,17 +104,32 @@ def retrieve_web_chunks(
         logger.warning("research.web_rank_failed", exc_info = True)
         return "", []
     finally:
-        try:
-            if doc_ids:
-                # Temporary scope is private to this request; delete in one transaction.
+        _cleanup_web_scope(conn, doc_ids)
+
+
+def _cleanup_web_scope(conn, doc_ids):
+    """Rollback failed ingestion and isolate failed deletes; cleanup must not mask retrieval."""
+    try:
+        if doc_ids:
+            # Never commit an unfinished ingestion transaction as part of deletion.
+            if conn.in_transaction:
+                conn.rollback()
+            try:
                 store.delete_documents(conn, doc_ids)
-        except Exception:
-            # Recover the original per-document cleanup if the batch fails.
-            conn.rollback()
-            for doc_id in doc_ids:
-                try:
-                    store.delete_document(conn, doc_id)
-                except Exception:
-                    logger.warning("research.web_rank_cleanup_failed doc_id=%s", doc_id)
-        finally:
+            except Exception:
+                conn.rollback()
+                for doc_id in doc_ids:
+                    try:
+                        store.delete_document(conn, doc_id)
+                    except Exception:
+                        logger.warning("research.web_rank_cleanup_failed doc_id=%s", doc_id)
+                        # A failed delete may have changed multiple tables. Do not
+                        # commit that partial transaction with the next document.
+                        conn.rollback()
+    except Exception:
+        logger.warning("research.web_rank_cleanup_failed", exc_info = True)
+    finally:
+        try:
             conn.close()
+        except Exception:
+            logger.warning("research.web_rank_close_failed", exc_info = True)

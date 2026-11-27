@@ -343,6 +343,119 @@ class AudioStartupTests(unittest.TestCase):
             self.assertFalse(directories[-1].exists())
 
 
+class AdditionalCorrectnessTests(unittest.TestCase):
+    def test_download_speed_invalid_numbers(self):
+        ns = source_defs("utils/download_speed_limit.py",
+                         {"normalize_speed_limit_mbps", "set_download_speed_limit_mbps",
+                          "speed_limit_bytes_per_second"},
+                         globals_=dict(math=math, Any=__import__("typing").Any, Optional=Optional))
+        for value in (False, True, 10 ** 1000, 1e308, float("nan"), float("inf")):
+            self.assertIsNone(ns["normalize_speed_limit_mbps"](value))
+            with self.assertRaises(ValueError):
+                ns["set_download_speed_limit_mbps"](value)
+        self.assertIsNone(ns["speed_limit_bytes_per_second"]("1e308"))
+        self.assertEqual(ns["speed_limit_bytes_per_second"]("8"), 1000000)
+
+    def test_web_cleanup_rolls_back_each_failed_delete(self):
+        calls = []
+        class Conn:
+            in_transaction = True
+            def rollback(self):
+                calls.append("rollback")
+            def close(self):
+                calls.append("close")
+                raise OSError("close failed")
+        def bulk(conn, ids):
+            calls.append(("bulk", ids))
+            raise RuntimeError("bulk failed")
+        def single(conn, doc_id):
+            calls.append(doc_id)
+            if doc_id == "a":
+                raise RuntimeError("partial delete")
+        ns = source_defs("core/rag/web_rank.py", {"_cleanup_web_scope"},
+                         globals_=dict(store=SimpleNamespace(delete_documents=bulk, delete_document=single),
+                                       logger=SimpleNamespace(warning=lambda *a, **k: None)))
+        ns["_cleanup_web_scope"](Conn(), ["a", "b"])
+        self.assertEqual(calls, ["rollback", ("bulk", ["a", "b"]), "rollback",
+                                 "a", "rollback", "b", "close"])
+        class Broken(Conn):
+            def rollback(self):
+                raise OSError("rollback failed")
+        calls.clear()
+        ns["_cleanup_web_scope"](Broken(), ["a"])
+        self.assertEqual(calls, ["close"])
+
+    def test_model_listing_cache_includes_recursive_setting(self):
+        path = BACKEND / "core/inference/model_cache_search.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "search_other_locations")
+        # Postponed annotations mirror the source module.
+        future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+        listings = {}
+        rows = {}
+        scans = []
+        recursive = False
+        def put(memo, key, value):
+            memo[key] = value
+        def scan(path, recurse):
+            scans.append(recurse)
+            return ("nested",) if recurse else ()
+        ns = dict(account_scope=lambda: "owner", _location_rows_memo=rows,
+                  _location_listings_memo=listings, _memo_get=lambda m, k: m.get(k),
+                  _memo_put=put, _known_cache_rows=lambda: (),
+                  _custom_folder_rows=lambda: (("folder", Path("/folder"), recursive, "folder"),),
+                  _build_custom_folder_listing=scan, _bounded=lambda raw, fn: fn())
+        mod = ast.fix_missing_locations(ast.Module(body=[future, fn], type_ignores=[]))
+        exec(compile(mod, str(path), "exec"), ns)
+        search = ns["search_other_locations"]
+        self.assertIsNone(search(iter, lambda x: x))
+        recursive = True
+        rows.clear()
+        self.assertEqual(search(iter, lambda x: x), "nested")
+        self.assertEqual(scans, [False, True])
+
+    def test_cancelled_image_follower_frees_batch_capacity(self):
+        import secrets
+        path = BACKEND / "core/inference/image_request_batching.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+        from dataclasses import field
+        ns = dict(__name__=__name__, asyncio=asyncio, os=os, secrets=secrets, dataclass=dataclass,
+                  field=field, SEED_MASK=(1 << 32) - 1, BATCH_MAX_DEFAULT=3, POLL_S=0.001,
+                  _OPEN={}, logger=SimpleNamespace(info=lambda *a: None))
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[future, *nodes], type_ignores=[])),
+                     str(path), "exec"), ns)
+        async def check():
+            busy = True
+            rendered = []
+            async def render(prompts, seeds):
+                rendered.extend(prompts)
+                return {"images": prompts, "seeds": seeds}
+            async def submit(prompt):
+                return await ns["generate"]("key", prompt, 1, None,
+                                            busy=lambda: busy, run_batch=render)
+            leader = asyncio.create_task(submit("leader"))
+            await asyncio.sleep(0)
+            follower = asyncio.create_task(submit("cancelled"))
+            await asyncio.sleep(0)
+            follower.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await follower
+            self.assertEqual(next(iter(ns["_OPEN"].values())).images, 1)
+            next_follower = asyncio.create_task(submit("next"))
+            await asyncio.sleep(0)
+            busy = False
+            first, second = await asyncio.wait_for(asyncio.gather(leader, next_follower), 2)
+            self.assertEqual(rendered, ["leader", "next"])
+            self.assertEqual(first["images"], ["leader"])
+            self.assertEqual(second["images"], ["next"])
+            self.assertFalse(ns["_OPEN"])
+        with patch.dict(os.environ, {"UNSLOTH_STUDIO_IMAGE_BATCH_MAX": "3"}):
+            asyncio.run(check())
+
+
 class LifecycleTests(unittest.TestCase):
     def test_response_close_error_still_closes_lines(self):
         ns = runpy.run_path(str(BACKEND / "core/inference/http_stream.py"))

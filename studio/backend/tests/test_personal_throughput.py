@@ -147,9 +147,9 @@ class ThroughputTests(unittest.TestCase):
                                 key=len, reverse=True))
         scan = source_defs("core/inference/tool_stream_exec.py", {"_hold_back_partial_secret"},
                            globals_=dict(_SECRET_PREFIXES=prefixes, _SECRET_TERMINATORS=terms,
-                                         _SECRET_SCAN_TAIL=128, _SECRET_PARTIAL_PREFIXES=partials))["_hold_back_partial_secret"]
-        def old(text):
-            tail_start = max(0, len(text) - 128)
+                                         _SECRET_PARTIAL_PREFIXES=partials))["_hold_back_partial_secret"]
+        def reference(text):
+            tail_start = 0
             tail = text[tail_start:]
             best = len(text)
             for prefix in prefixes:
@@ -170,7 +170,11 @@ class ThroughputTests(unittest.TestCase):
         chunks = ["x"*200, "é", "\n", " ", "sk-unsloth-", "desktop-", "hello"] + list(partials)
         for _ in range(5000):
             value = "".join(rng.choices(chunks, k=rng.randrange(1, 10)))
-            self.assertEqual(scan(value), old(value))
+            self.assertEqual(scan(value), reference(value))
+        for prefix in prefixes:
+            synthetic = "message " + prefix + "a" * 4096
+            self.assertEqual(scan(synthetic), len("message "))
+            self.assertEqual(scan(synthetic + "\n"), len(synthetic) + 1)
 
     def test_token_estimates(self):
         regex = re.compile(r"\S{64,}")

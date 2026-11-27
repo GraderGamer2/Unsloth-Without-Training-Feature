@@ -23,8 +23,9 @@ _location_lock = threading.Lock()
 # (row key, path, recursive, kind): kind "cache" is a Hub cache root, "folder" a custom folder.
 _Row = tuple[str, Path, bool, str]
 _location_rows_memo: dict[str, tuple[float, tuple[_Row, ...]]] = {}
-# Keyed by kind too: a known cache that is also a custom folder is listed both ways (repos only, and loose files).
-_location_listings_memo: dict[tuple[str, str, str], tuple[float, "LocationListing"]] = {}
+# Include recursive mode: changing a custom folder's scan settings must not reuse its old listing.
+# A known cache that is also a custom folder is listed both ways (repos only, and loose files).
+_location_listings_memo: dict[tuple[str, str, str, bool], tuple[float, "LocationListing"]] = {}
 _LOCATION_MEMO_MAX = 256
 _T = TypeVar("_T")
 _C = TypeVar("_C")
@@ -231,16 +232,19 @@ def search_other_locations(
         rows = (*_known_cache_rows(), *_custom_folder_rows())
         _memo_put(_location_rows_memo, scope, rows)
     for raw, path, recursive, kind in rows:
-        listing = _memo_get(_location_listings_memo, (scope, kind, raw))
-        if listing is not None and not any(True for _ in candidates(listing)):
+        listing_key = (scope, kind, raw, recursive)
+        listing = _memo_get(_location_listings_memo, listing_key)
+        cached_candidates = tuple(candidates(listing)) if listing is not None else None
+        if cached_candidates == ():
             continue
 
         def search(
-            raw = raw,
             path = path,
             recursive = recursive,
             kind = kind,
             listing = listing,
+            listing_key = listing_key,
+            cached_candidates = cached_candidates,
         ) -> Optional[_T]:
             if listing is None:
                 if kind == "cache":
@@ -249,8 +253,8 @@ def search_other_locations(
                     )
                 else:
                     listing = _build_custom_folder_listing(path, recursive)
-                _memo_put(_location_listings_memo, (scope, kind, raw), listing)
-            for candidate in candidates(listing):
+                _memo_put(_location_listings_memo, listing_key, listing)
+            for candidate in (candidates(listing) if cached_candidates is None else cached_candidates):
                 found = probe(candidate)
                 if found is not None:
                     return found

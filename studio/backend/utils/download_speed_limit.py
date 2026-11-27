@@ -23,8 +23,11 @@ class DownloadSpeedLimitUnavailableError(RuntimeError):
 def normalize_speed_limit_mbps(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    mbps = float(value)
-    if not math.isfinite(mbps) or mbps <= 0:
+    try:
+        mbps = float(value)
+    except OverflowError:
+        return None
+    if not math.isfinite(mbps) or mbps <= 0 or not math.isfinite(mbps * 125_000):
         return None
     return mbps
 
@@ -45,7 +48,7 @@ def get_download_speed_limit_mbps() -> Optional[float]:
 
 
 def set_download_speed_limit_mbps(value: Any) -> Optional[float]:
-    if value is None or value == 0:
+    if value is None or (type(value) in (int, float) and value == 0):
         mbps = None
     else:
         mbps = normalize_speed_limit_mbps(value)
