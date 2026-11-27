@@ -655,7 +655,8 @@ def _trim_unload_kv(stale: list, *, keep_newest: bool) -> None:
 
 def stash_unload_kv(manifest) -> None:
     with _lock:
-        stale = [m for m in _unload_kv if m.get("gguf") == manifest.get("gguf")]
+        # Re-stashing the identical manifest must not unlink its own slot files.
+        stale = [m for m in _unload_kv if m is not manifest and m.get("gguf") == manifest.get("gguf")]
         _unload_kv[:] = [m for m in _unload_kv if m.get("gguf") != manifest.get("gguf")]
         _unload_kv.append(manifest)
         _trim_unload_kv(stale, keep_newest = True)

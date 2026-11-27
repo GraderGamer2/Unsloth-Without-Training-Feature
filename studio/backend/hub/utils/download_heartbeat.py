@@ -20,10 +20,16 @@ def read(path: Optional[str]) -> Optional[int]:
     if not path:
         return None
     try:
-        text = Path(path).read_text(encoding = "utf-8").strip()
-    except OSError:
+        # Byte counters are ASCII decimal; never let malformed or oversized
+        # progress files abort the stall watchdog.
+        with Path(path).open("rb") as handle:
+            raw = handle.read(65)
+        if len(raw) > 64:
+            return None
+        text = raw.strip()
+        return int(text) if text.isdigit() else None
+    except (OSError, ValueError):
         return None
-    return int(text) if text.isdigit() else None
 
 
 def age(path: Optional[str]) -> Optional[float]:

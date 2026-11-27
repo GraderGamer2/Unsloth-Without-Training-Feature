@@ -224,6 +224,20 @@ LLAMA += [
 ]
 
 
+# Speculative slot state belongs to one verification / request, not its successor.
+LLAMA += [
+  [
+    "tools/server/server-context.cpp",
+    "            spec_draft.clear();\n            spec_i_batch.clear();\n            spec_ckpt.clear();",
+    "            spec_draft.clear();\n            spec_draft_q.clear();\n            spec_prompt.clear();\n            spec_i_batch.clear();\n            spec_ckpt.clear();"
+  ],
+  [
+    "tools/server/server-context.cpp",
+    "                GGML_ASSERT(accepted.size() >= 1);\n\n                const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();",
+    "                GGML_ASSERT(accepted.size() >= 1);\n\n                // Candidate distributions are consumed by this verification only.\n                // Checkpoint replays explicitly bypass them. Release their nested\n                // allocations now instead of retaining a previous task's logits.\n                slot.spec_draft_q.clear();\n\n                const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();"
+  ]
+]
+
 # Further pinned per-engine optimizations, separate from shared ggml patches.
 LLAMA += [
   [

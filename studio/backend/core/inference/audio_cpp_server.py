@@ -861,11 +861,17 @@ class AudioCppServer:
     def stop(self) -> None:
         process = self.process
         if process.poll() is None:
-            process.terminate()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass  # Exited between poll and signal; still reap it below.
             try:
                 process.wait(timeout = 10)
             except subprocess.TimeoutExpired:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
                 # A killed server can sit in GPU teardown well past 10 s (Seed-VC took about 54 s); the music reload restarts it mid-session and must not fail on that
                 try:
                     process.wait(timeout = 120)
@@ -875,8 +881,10 @@ class AudioCppServer:
                     )
                     shutil.rmtree(self._config_dir, ignore_errors = True)
                     return
-        forget_pid(process.pid)
-        shutil.rmtree(self._config_dir, ignore_errors = True)
+        try:
+            forget_pid(process.pid)
+        finally:
+            shutil.rmtree(self._config_dir, ignore_errors = True)
 
 
 def _error_detail(data: bytes) -> str:

@@ -880,10 +880,16 @@ def verify_against_disk(manifest: Manifest, snapshot_dir: Path) -> VerifyResult:
             continue
         target = snapshot_dir / expected.path
         try:
-            actual_size = target.stat().st_size
+            info = target.stat()
         except OSError:
             missing.append(expected.path)
             continue
+        # Directories, device nodes and FIFOs are not completed model files.
+        # stat follows the regular-file symlinks used by the Hugging Face cache.
+        if not stat.S_ISREG(info.st_mode):
+            missing.append(expected.path)
+            continue
+        actual_size = info.st_size
         # expected.size == 0 means HF metadata had no declared size: verify existence only.
         if expected.size > 0 and actual_size != expected.size:
             mismatched.append(expected.path)

@@ -26,7 +26,7 @@ function browserTargets(): VisibilityPollTargets {
 }
 
 /**
- * `run` resolves false to end the chain until the next restart, and must not reject. `delay(hidden)` spaces the runs;
+ * `run` resolves false to end the chain until the next restart; failures retry on the usual delay. `delay(hidden)` spaces the runs;
  * null parks a hidden tab until it is shown. Becoming visible refreshes at once unless
  * `wakeOnVisible` is false, which then only suits a `delay` that never parks.
  */
@@ -53,14 +53,19 @@ export function startVisibilityPoll(
     const mine = ++token;
     inFlight = true;
     ended = false;
-    void run().then((again) => {
+    const settle = (again: boolean) => {
       if (mine !== token) return;
       inFlight = false;
       ended = !again;
       if (stopped || ended) return;
       const ms = delay(targets.document.hidden);
       if (ms !== null) timer = targets.setTimeout(restart, ms);
-    });
+    };
+    try {
+      void run().then(settle, () => settle(true));
+    } catch {
+      settle(true);
+    }
   };
   const refresh = () => {
     if (!inFlight && !ended) restart();

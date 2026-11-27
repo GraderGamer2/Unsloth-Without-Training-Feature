@@ -45,6 +45,12 @@ class VulkanPatchTests(unittest.TestCase):
                 PATCH["apply"](root)
             self.assertEqual(originals, {p: p.read_text(encoding="utf-8") for p in originals})
 
+    def test_cooperative_mask_reduction_keeps_upstream_barrier(self):
+        # The scalar kernel has an earlier barrier; cm1 does not. Removing the
+        # latter's barrier would permit inter-subgroup overwrite on a skip.
+        self.assertFalse(any(p == "vulkan-shaders/flash_attn_cm1.comp"
+                             for p, old, new, count in SPECS))
+
     def test_empty_tail_has_no_active_blocks(self):
         for group_size in (16, 32, 64, 128, 256):
             groups = group_size // 16

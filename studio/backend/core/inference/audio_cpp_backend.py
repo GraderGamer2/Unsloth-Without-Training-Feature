@@ -492,7 +492,17 @@ class AudioCppBackend:
 
             self._device_fallback = None
             self._force_cpu = audio_device_forces_cpu(self.device_preference)
-            self._start_server(model)
+            try:
+                self._start_server(model)
+            except BaseException:
+                # Starting a replacement stops the old server first. Do not
+                # advertise the old model as resident after replacement failed.
+                with self._server_lock:
+                    if self._server is None or not self._server.alive():
+                        self.models.clear()
+                        self.active_model_name = None
+                        self._model = None
+                raise
             self._model = model
             self.models = {
                 model_name: {
@@ -1357,12 +1367,12 @@ class AudioCppBackend:
     # Unloading
     @_invalidates_gpu_memory("audio unload")
     def unload_model(self, model_name: str) -> bool:
-        self.models.pop(model_name, None)
-        if self.active_model_name == model_name:
-            self.active_model_name = None
-            self._model = None
         with self._server_lock:
-            self._stop_server_locked()
+            self.models.pop(model_name, None)
+            if self.active_model_name == model_name:
+                self.active_model_name = None
+                self._model = None
+                self._stop_server_locked()
         return True
 
     def reset_generation_state(self, caller_cancel_event = None) -> None:

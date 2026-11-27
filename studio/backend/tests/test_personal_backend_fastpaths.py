@@ -456,6 +456,93 @@ class AdditionalCorrectnessTests(unittest.TestCase):
             asyncio.run(check())
 
 
+class SevenAreaRegressionTests(unittest.TestCase):
+    def test_audio_stale_unload_does_not_stop_new_model(self):
+        import threading
+        ns = source_defs("core/inference/audio_cpp_backend.py", {"unload_model"},
+                         class_name="AudioCppBackend")
+        stopped = []
+        backend = SimpleNamespace(models={"new": {}}, active_model_name="new", _model=object(),
+                                  _server_lock=threading.RLock(), _stop_server_locked=lambda: stopped.append(True))
+        self.assertTrue(ns["unload_model"](backend, "old"))
+        self.assertEqual(backend.active_model_name, "new")
+        self.assertEqual(stopped, [])
+        self.assertTrue(ns["unload_model"](backend, "new"))
+        self.assertIsNone(backend.active_model_name)
+        self.assertEqual(stopped, [True])
+
+    def test_audio_exit_between_poll_and_signal_is_reaped(self):
+        import shutil
+        import subprocess
+        calls = []
+        class Proc:
+            pid = 123
+            def poll(self):
+                return None
+            def terminate(self):
+                raise ProcessLookupError()
+            def wait(self, timeout):
+                calls.append(timeout)
+        ns = source_defs("core/inference/audio_cpp_server.py", {"stop"},
+                         class_name="AudioCppServer",
+                         globals_=dict(shutil=shutil, subprocess=subprocess,
+                                       forget_pid=lambda pid: calls.append(pid)))
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "config"
+            folder.mkdir()
+            ns["stop"](SimpleNamespace(process=Proc(), _config_dir=folder))
+            self.assertFalse(folder.exists())
+        self.assertEqual(calls, [10, 123])
+
+    def test_repeat_kv_stash_does_not_delete_live_manifest(self):
+        import threading
+        entry = {"gguf": "model", "slots": []}
+        old = {"gguf": "model", "slots": [{"filename": "old"}]}
+        saved = [old, entry]
+        deleted = []
+        ns = source_defs("core/inference/llama_keepwarm.py", {"stash_unload_kv"},
+                         globals_=dict(_lock=threading.Lock(), _unload_kv=saved,
+                                       _trim_unload_kv=lambda *a, **k: None,
+                                       _delete_resume_files=deleted.append))
+        ns["stash_unload_kv"](entry)
+        self.assertEqual(len(saved), 1)
+        self.assertIs(saved[0], entry)
+        self.assertEqual(deleted, [old])
+        ns["stash_unload_kv"](entry)
+        self.assertEqual(deleted, [old])
+
+    def test_manifest_rejects_non_regular_files_even_with_unknown_size(self):
+        import stat
+        ns = source_defs("hub/utils/download_manifest.py", {"verify_against_disk"},
+                         globals_=dict(Manifest=object, VerifyResult=SimpleNamespace,
+                                       Path=Path, stat=stat, expected_path_is_safe=lambda _: True))
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            (base / "dir.gguf").mkdir()
+            (base / "weights").write_bytes(b"123")
+            (base / "alias.gguf").symlink_to(base / "weights")
+            (base / "truncated.gguf").write_bytes(b"x")
+            m = SimpleNamespace(expected_files=[
+                SimpleNamespace(path="dir.gguf", size=0),
+                SimpleNamespace(path="alias.gguf", size=3),
+                SimpleNamespace(path="truncated.gguf", size=3)])
+            result = ns["verify_against_disk"](m, base)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.missing, ("dir.gguf",))
+            self.assertEqual(result.size_mismatched, ("truncated.gguf",))
+
+    def test_corrupted_download_heartbeat_never_raises(self):
+        ns = source_defs("hub/utils/download_heartbeat.py", {"read"},
+                         globals_=dict(Path=Path, Optional=Optional))
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "heartbeat"
+            for malformed in (b"\xff", "²".encode(), b"9" * 5000, b"-1", b"bad"):
+                path.write_bytes(malformed)
+                self.assertIsNone(ns["read"](str(path)))
+            path.write_bytes(b" 123\n")
+            self.assertEqual(ns["read"](str(path)), 123)
+
+
 class LifecycleTests(unittest.TestCase):
     def test_response_close_error_still_closes_lines(self):
         ns = runpy.run_path(str(BACKEND / "core/inference/http_stream.py"))

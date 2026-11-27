@@ -28,14 +28,24 @@ export async function* decodeTextChunks(
 
 async function* fileBytes(file: File): AsyncGenerator<Uint8Array> {
   const reader = file.stream().getReader();
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        completed = true;
+        break;
+      }
       if (value) yield value;
     }
   } finally {
-    reader.releaseLock();
+    try {
+      // Early termination (including a size-limit error) must cancel the
+      // underlying file stream, not merely unlock an abandoned reader.
+      if (!completed) await reader.cancel().catch(() => {});
+    } finally {
+      reader.releaseLock();
+    }
   }
 }
 
@@ -56,13 +66,13 @@ export async function readAllText(
   let text = "";
   let bytes = 0;
   for await (const chunk of source.chunks()) {
-    text += chunk.text;
     bytes += chunk.bytes;
     if (bytes > maxBytes) {
       throw new Error(
         `${source.name} is too large to import as ${format} (maximum ${Math.floor(maxBytes / 1024 / 1024)} MiB).`,
       );
     }
+    text += chunk.text;
   }
   return text;
 }
