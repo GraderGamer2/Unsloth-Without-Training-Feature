@@ -506,7 +506,6 @@ class _StageSlot:
             self._slots.release()
 
 
-@embeddings.embedding_activity
 def _run(
     job_id: str,
     document_id: str,
@@ -695,8 +694,6 @@ def start_ingestion(
     content_hash: str | None = None,
     reuse_identical: bool = False,
     stage_slots: threading.Semaphore | None = None,
-    source_url: str | None = None,
-    source_partial: bool = False,
 ) -> tuple[str, str]:
     """Duplicate hash reuses the existing document; a passed content_hash is trusted, never reverified.
     ``stage_slots`` bounds concurrent parse/store while any number wait to embed together."""
@@ -733,7 +730,6 @@ def start_ingestion(
             raise RuntimeError("Owning scope is being deleted")
         # Old doc deleted only after the replacement completes, so a failed re-index keeps it.
         replaces: tuple[str, str | None] | None = None
-        source_enabled = True
         existing = store.document_by_hash(conn, scope, sha) if dedupe else None
         if existing is not None:
             doc = store.get_document(conn, existing)
@@ -762,9 +758,6 @@ def start_ingestion(
             if empty_completed or stale_model or in_progress:
                 # Retry empty, stale or orphaned documents; keep the old copy until success.
                 replaces = (existing, doc.get("stored_path"))
-                source_url = source_url or doc.get("source_url")
-                source_partial = source_partial or bool(doc.get("source_partial"))
-                source_enabled = bool(doc.get("source_enabled", True))
             else:
                 job_id = _new_job(conn, existing, scope, status = "completed", progress = 1.0)
                 _remove_upload(stored_path, keep_path = doc.get("stored_path"))
@@ -847,9 +840,6 @@ def start_ingestion(
             embedding_model = effective_identity,
             linked_folder_id = linked_folder_id,
             linked_relative_path = linked_relative_path,
-            source_url = source_url,
-            source_partial = source_partial,
-            source_enabled = source_enabled,
             commit = False,
         )
         job_id = _new_job(conn, document_id, scope)

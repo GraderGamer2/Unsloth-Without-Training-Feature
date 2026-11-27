@@ -98,9 +98,7 @@ export function EmbeddingModelPicker({
   const { results, isLoading } = useHubModelSearch(debouncedQuery, {
     task: EMBEDDING_TASKS,
     accessToken,
-    // Third-party GGUF embedding conversions are valid selectable repos.
-    // The task filter still excludes ordinary chat/GGUF generators.
-    excludeGguf: false,
+    excludeGguf: true,
     enabled: open && !disabled,
     ownerScope: debouncedQuery ? "all" : "unsloth",
     priorityIds: PINNED_EMBEDDING_MODELS,

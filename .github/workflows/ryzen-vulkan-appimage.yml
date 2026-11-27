@@ -412,12 +412,11 @@ jobs:
           python3 studio/src-tauri/linux/test-personal-throughput.py
           python3 studio/src-tauri/linux/test-personal-build-cache.py
           python3 studio/backend/tests/test_personal_throughput.py
-          python3 studio/backend/tests/test_personal_web_sources.py
 
       - name: Verify frontend streaming and lifecycle behavior
         working-directory: studio/frontend
         run: |
-          node --experimental-strip-types --test tests/parse-markdown-blocks-dollar-merge.test.ts tests/streaming-render-schedule.test.ts tests/personal-lifecycle.test.ts tests/personal-project-grounding.test.ts
+          node --experimental-strip-types --test tests/parse-markdown-blocks-dollar-merge.test.ts tests/streaming-render-schedule.test.ts tests/personal-lifecycle.test.ts
 
       - name: Compile Zen 3 desktop and inference-only backend
         run: |

@@ -35,7 +35,6 @@ def _fit_to_budget(hits, rows, char_budget):
     return kept
 
 
-@embeddings.embedding_activity
 def retrieve_web_chunks(
     pages: list[dict],
     query: str,

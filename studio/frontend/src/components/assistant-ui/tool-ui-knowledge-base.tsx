@@ -52,7 +52,7 @@ export function CitationBadge({
   /** Every page cited from this document, when the badge stands for all of them. */
   pages?: readonly number[];
 }) {
-  const label = citationLabel(citation, pages) + (citation.sourcePartial ? " · extracted snapshot" : "");
+  const label = citationLabel(citation, pages);
   const { documentId, filename } = citation;
   const clickable = Boolean(documentId);
 
@@ -78,7 +78,6 @@ export function CitationBadge({
     return <span className="inline-block">{badge}</span>;
   }
   return (
-    <span className="inline-flex items-center gap-1">
     <RagDocumentTrigger
       documentId={documentId}
       filename={filename}
@@ -88,11 +87,6 @@ export function CitationBadge({
         {badge}
       </button>
     </RagDocumentTrigger>
-    {citation.sourceUrl && /^https?:\/\//i.test(citation.sourceUrl) ? (
-      <a className="text-xs underline text-muted-foreground" href={citation.sourceUrl}
-        target="_blank" rel="noopener noreferrer" title={citation.sourceUrl}>Original</a>
-    ) : null}
-    </span>
   );
 }
 

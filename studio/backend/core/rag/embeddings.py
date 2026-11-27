@@ -24,7 +24,6 @@ from utils.transformers_dtype import dtype_kwargs
 from utils.utils import hf_env_offline
 
 from . import config
-from .embed_idle import IdleRelease
 
 logger = logging.getLogger(__name__)
 
@@ -1379,14 +1378,13 @@ def backend_is_loaded(model_name: str | None = None) -> bool:
     return False
 
 
-def _release_backend(*, reset_choice: bool = True) -> bool:
-    """Drop the embedder; automatic idle release retains the selected vector space."""
+def release_backend() -> bool:
+    """Drops the embedder, stopping its llama-server; safe mid-ingestion as the next embed rebuilds it."""
     global _backend, _backend_key, _resident_hardware, _gpu_found_key
     with _backend_lock:
         # Unload is an explicit fresh start, so a past runtime fallback stops pinning the choice and the saved
         # model picks its backend again.
-        if reset_choice:
-            _forced_backends.clear()
+        _forced_backends.clear()
         backend, _backend, _backend_key = _backend, None, None
         _resident_hardware = None
         _gpu_found_key = None
@@ -1395,15 +1393,6 @@ def _release_backend(*, reset_choice: bool = True) -> bool:
         return _release_st_model()
     _dispose_replaced_backend(backend)
     return True
-
-
-_idle_release = IdleRelease(lambda: _release_backend(reset_choice=False))
-embedding_activity = _idle_release.guarded
-
-
-def release_backend() -> bool:
-    """Manual eject retains the existing explicit fresh-start behavior."""
-    return _idle_release.manual_release(_release_backend)
 
 
 def active_backend_is_llama(model_name: str | None = None) -> bool:
@@ -1520,7 +1509,6 @@ def _is_llama_backend(backend) -> bool:
     return isinstance(backend, LlamaServerBackend)
 
 
-@embedding_activity
 def encode_with_identity(
     texts: list[str],
     *,
@@ -1539,13 +1527,11 @@ def encode_with_identity(
     return vectors, _identity(_is_llama_backend(served), name, served, served_identity)
 
 
-@embedding_activity
 def warm(model_name: str | None = None) -> None:
     """Eagerly load the embedder so the first real request isn't slow."""
     _get_backend(model_name).warm(model_name = model_name)
 
 
-@embedding_activity
 def encode(
     texts: list[str],
     *,
@@ -1573,12 +1559,10 @@ def encode(
     return vectors
 
 
-@embedding_activity
 def dim(model_name: str | None = None) -> int:
     return _get_backend(model_name).dim(model_name = model_name)
 
 
-@embedding_activity
 def max_tokens(model_name: str | None = None) -> int | None:
     return _get_backend(model_name).max_tokens(model_name = model_name)
 
@@ -1627,14 +1611,12 @@ def chunk_tokens(model_name: str | None = None) -> int:
     return min(config.CHUNK_TOKENS, limit) if limit else config.CHUNK_TOKENS
 
 
-@embedding_activity
 def token_counter(model_name: str | None = None) -> Callable[[str], int]:
     """Reacquires the backend only for an unload's lifecycle failure; other tokenizer errors propagate."""
     backend = _get_backend(model_name)
     state = (backend, backend.token_counter(model_name = model_name))
     counter_lock = threading.Lock()
 
-    @embedding_activity
     def _served(use):
         nonlocal state
         served_backend, served_count = state

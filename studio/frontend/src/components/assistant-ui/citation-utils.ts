@@ -11,8 +11,6 @@ export interface Citation {
   text: string;
   documentId?: string | null;
   chunkId?: string | null;
-  sourceUrl?: string | null;
-  sourcePartial?: boolean;
 }
 
 function asNumber(value: unknown): number | null {
@@ -45,8 +43,6 @@ function parseSentinelSources(result: unknown): Citation[] | null {
       text: typeof r.text === "string" ? r.text : "",
       documentId,
       chunkId,
-      sourceUrl: typeof r.sourceUrl === "string" ? r.sourceUrl : null,
-      sourcePartial: r.sourcePartial === true,
     };
   });
 }
@@ -108,10 +104,6 @@ export function parseCitations(result: unknown): Citation[] {
       page: asNumber(r.page),
       score: asNumber(r.score),
       text,
-      documentId: typeof r.documentId === "string" ? r.documentId : null,
-      chunkId,
-      sourceUrl: typeof r.sourceUrl === "string" ? r.sourceUrl : null,
-      sourcePartial: r.sourcePartial === true,
     });
   });
   return citations;
