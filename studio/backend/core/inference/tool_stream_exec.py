@@ -16,6 +16,13 @@ from loggers import get_logger
 
 # Split across two chunks, neither half matches the key pattern and the credential is painted whole.
 _SECRET_PREFIXES = ("sk-unsloth-", "desktop-")
+_SECRET_PARTIAL_PREFIXES = tuple(
+    sorted(
+        {prefix[:length] for prefix in _SECRET_PREFIXES for length in range(1, len(prefix))},
+        key = len,
+        reverse = True,
+    )
+)
 # A prefix plus a generous token: bounds the reverse search on a multi-megabyte chunk.
 _SECRET_SCAN_TAIL = 128
 # What ends a credential token in tool output: whitespace, quoting and closing punctuation.
@@ -25,24 +32,20 @@ _SECRET_TERMINATORS = frozenset(" \t\r\n\"'`,;)]}")
 def _hold_back_partial_secret(text: str) -> int:
     """Index where a credential token still open at the end of `text` begins; the tail is held back."""
     tail_start = max(0, len(text) - _SECRET_SCAN_TAIL)
-    tail = text[tail_start:]
     best = len(text)
     for prefix in _SECRET_PREFIXES:
-        index = tail.rfind(prefix)
+        index = text.rfind(prefix, tail_start)
         while index != -1:
-            absolute = tail_start + index
-            rest = text[absolute + len(prefix) :]
+            rest = text[index + len(prefix) :]
             # A terminator anywhere after the token ends it, so the text is safe to emit.
             if not rest or not _SECRET_TERMINATORS.intersection(rest):
-                best = min(best, absolute)
-            # Keep going left: an earlier occurrence may still be open.
-            index = tail.rfind(prefix, 0, index)
-    # Also a tail that is a PREFIX of a prefix ("...sk-unslo"), which no rfind above can see.
-    for prefix in _SECRET_PREFIXES:
-        for length in range(min(len(prefix) - 1, len(text)), 0, -1):
-            if text.endswith(prefix[:length]):
-                best = min(best, len(text) - length)
-                break
+                best = min(best, index)
+            index = text.rfind(prefix, tail_start, index)
+    # Longest partial prefix yields the earliest index, as before.
+    for prefix in _SECRET_PARTIAL_PREFIXES:
+        if text.endswith(prefix):
+            best = min(best, len(text) - len(prefix))
+            break
     return best
 
 

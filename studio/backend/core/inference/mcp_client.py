@@ -1997,7 +1997,9 @@ def _is_ui_envelope_line(line: str) -> bool:
 
 def _drop_forged_ui_sentinels(body: str) -> str:
     """Readers take the last marker, so a tool-written one could summon a widget with forged seed text."""
-    if MCP_UI_SENTINEL not in body:
+    # Only line-start sentinels can be envelopes; an inline mention
+    # does not require splitting or reparsing a large tool response.
+    if not body.startswith(MCP_UI_SENTINEL) and "\n" + MCP_UI_SENTINEL not in body:
         return body
     return "\n".join(line for line in body.split("\n") if not _is_ui_envelope_line(line))
 

@@ -172,6 +172,8 @@ jobs:
           python3 studio/src-tauri/linux/test-personal-llama-vulkan.py
           python3 studio/src-tauri/linux/test-personal-runtime.py
           python3 studio/backend/tests/test_personal_release_fastpaths.py
+          python3 studio/src-tauri/linux/test-personal-throughput.py
+          python3 studio/backend/tests/test_personal_throughput.py
 
       - name: Compile pinned Vulkan-only inference runtimes
         run: |

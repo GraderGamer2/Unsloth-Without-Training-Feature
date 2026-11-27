@@ -105,9 +105,17 @@ def retrieve_web_chunks(
         logger.warning("research.web_rank_failed", exc_info = True)
         return "", []
     finally:
-        for doc_id in doc_ids:
-            try:
-                store.delete_document(conn, doc_id)
-            except Exception:
-                logger.warning("research.web_rank_cleanup_failed doc_id=%s", doc_id)
-        conn.close()
+        try:
+            if doc_ids:
+                # Temporary scope is private to this request; delete in one transaction.
+                store.delete_documents(conn, doc_ids)
+        except Exception:
+            # Recover the original per-document cleanup if the batch fails.
+            conn.rollback()
+            for doc_id in doc_ids:
+                try:
+                    store.delete_document(conn, doc_id)
+                except Exception:
+                    logger.warning("research.web_rank_cleanup_failed doc_id=%s", doc_id)
+        finally:
+            conn.close()

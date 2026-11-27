@@ -55,6 +55,8 @@ compile() {
         ggml="$source/external/ggml"
     fi
     python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-runtime.py" "$component" "$source"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-throughput.py" "$component" "$source"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/apply-personal-throughput.py" "$component" "$source"
     # These optional shaders require NVIDIA Vulkan extensions that Rembrandt cannot use.
     python3 - "$ggml/src/ggml-vulkan/CMakeLists.txt" <<'PY'
 import re

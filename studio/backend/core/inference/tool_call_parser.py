@@ -3095,7 +3095,7 @@ def _parse_mistral_array(
         if isinstance(arr, list):
             for obj in arr:
                 if isinstance(obj, dict):
-                    _consume_mistral_call(json.dumps(obj), out, id_offset)
+                    _consume_mistral_call(obj, out, id_offset)
         return out
     except (json.JSONDecodeError, ValueError):
         if not allow_incomplete:
@@ -3118,13 +3118,14 @@ def _parse_mistral_array(
 
 
 def _consume_mistral_call(
-    obj_text: str,
+    obj_text: str | dict,
     out: list[dict],
     id_offset: int,
     *,
     relaxed: bool = True,
 ) -> None:
-    obj = _loads_call_object(obj_text, relaxed = relaxed)
+    # A strict array decoder has already parsed this object.
+    obj = obj_text if isinstance(obj_text, dict) else _loads_call_object(obj_text, relaxed = relaxed)
     if not isinstance(obj, dict):
         return
     name = obj.get("name") or ""

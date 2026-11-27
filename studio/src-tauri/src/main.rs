@@ -962,6 +962,9 @@ fn tauri_log_path() -> Option<PathBuf> {
 /// The supervisor parent has no logger (it never runs setup_logging), so it appends directly.
 #[cfg(target_os = "linux")]
 fn append_supervisor_log(path: Option<&Path>, line: &str) {
+    if linux_storage::personal_vulkan() {
+        return;
+    }
     eprintln!("[gpu-supervisor] {line}");
     if let Some(path) = path {
         if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {

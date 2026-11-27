@@ -203,7 +203,11 @@ def estimate_messages_tokens_conservative(
             total += max(1, wide + (len(text) - wide) // _DENSE_RUN_CHARS_PER_TOKEN)
             continue
         # ASCII only: a run of CJK is already charged a token a character above.
-        runs = sum(_ascii_count(match.group(0)) for match in _DENSE_RUN_RE.finditer(text))
+        if wide == 0:
+            # Avoid allocating matched substrings from large ASCII attachments.
+            runs = sum(match.end() - match.start() for match in _DENSE_RUN_RE.finditer(text))
+        else:
+            runs = sum(_ascii_count(match.group(0)) for match in _DENSE_RUN_RE.finditer(text))
         plain = len(text) - wide - runs
         total += max(1, wide + runs // _DENSE_RUN_CHARS_PER_TOKEN + plain // 4)
     return total
