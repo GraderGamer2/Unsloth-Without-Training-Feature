@@ -28,8 +28,12 @@ checkout_source() {
     fi
     if [[ "$(git -C "$source" rev-parse --verify HEAD 2>/dev/null || true)" != "$revision" ]]; then
         git -C "$source" fetch --depth 1 origin "$revision"
-        git -C "$source" checkout --quiet --detach FETCH_HEAD
     fi
+    # This checkout is generated build input, not a developer worktree.
+    # Restore pristine tracked files even when the pin is unchanged: patch
+    # sets can change between invocations, and some patches modify the same
+    # upstream file in separate layers. Keep compiler caches in native/.
+    git -C "$source" checkout --quiet --detach --force "$revision"
 }
 
 compile() {
@@ -122,7 +126,7 @@ for component in "${components[@]}"; do
             ;;
         diffusion)
             checkout_source diffusion stable-diffusion.cpp 9455ee1fa10cba979e9b02533550bf4d71d654fe
-            git -C "$work/sources/diffusion" submodule update --init --depth 1 \
+            git -C "$work/sources/diffusion" submodule update --init --depth 1 --force \
                 ggml thirdparty/libwebp thirdparty/libwebm
             compile diffusion sd-cli sd-server -- -DSD_VULKAN=ON -DSD_CUDA=OFF \
                 -DSD_HIPBLAS=OFF -DSD_METAL=OFF -DSD_BUILD_EXAMPLES=ON \

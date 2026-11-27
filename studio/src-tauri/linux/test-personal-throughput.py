@@ -27,6 +27,44 @@ class ThroughputTests(unittest.TestCase):
                     PATCH["apply"](engine, root)
                     self.assertEqual(after, {p: (root / p).read_bytes() for p in original})
 
+    def test_all_patch_layers_compose(self):
+        # Each patcher previously had its own isolated fixture. Test the same
+        # execution order as build-personal-runtimes.sh, across all layers.
+        here = Path(__file__).parent
+        runtime = runpy.run_path(str(here / "apply-personal-runtime.py"))
+        vulkan = runpy.run_path(str(here / "apply-personal-llama-vulkan.py"))
+        for engine in ("llama", "diffusion", "whisper", "audio"):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                specs = []
+                if engine == "llama":
+                    specs.extend((vulkan["ROOT"] + p, old, new, count)
+                                 for p, old, new, count in vulkan["patch_specs"]())
+                specs.extend((p, old, new, 1)
+                             for p, old, new in runtime["patch_specs"](engine))
+                specs.extend((p, old, new, 1)
+                             for p, old, new in PATCH["patch_specs"](engine))
+                anchors = {}
+                originals = {}
+                for p, old, new, count in specs:
+                    previous = anchors.setdefault(p, [])
+                    for earlier in previous:
+                        self.assertFalse(old in earlier or earlier in old,
+                                         f"Overlapping patch anchors in {engine}: {p}")
+                    previous.append(old)
+                    originals[p] = originals.get(p, "") + (old + "\n// separator\n") * count
+                for p, content in originals.items():
+                    path = root / p
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8")
+                if engine == "llama":
+                    vulkan["apply"](root)
+                runtime["apply"](engine, root)
+                PATCH["apply"](engine, root)
+                for p, old, new, count in specs:
+                    self.assertEqual((root / p).read_text(encoding="utf-8").count(new),
+                                     count, f"Lost patch in {engine}: {p}")
+
     def test_activation_load_addresses(self):
         for blocks in range(1, 65):
             for lanes in (1, 2, 4, 8, 16):

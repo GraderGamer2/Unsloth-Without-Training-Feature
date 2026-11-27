@@ -60,6 +60,19 @@ class RuntimePatchTests(unittest.TestCase):
                 self.assertGreaterEqual(copied, 0)
                 self.assertLessEqual(offset + copied, physical)
 
+    def test_short_pcm_reflection_bounds(self):
+        # The upstream reverse_copy read stage_2_pad samples even for inputs
+        # shorter than that. Reflect the zero-padded input instead.
+        pad = 200
+        for n in range(1, 513):
+            samples = list(range(1, n + 1))
+            available = min(pad, n - 1)
+            reflected = [0] * (pad - available) + list(reversed(samples[1:1 + available]))
+            expected = [samples[i] if i < n else 0 for i in range(pad, 0, -1)]
+            self.assertEqual(reflected, expected)
+            if n > pad:
+                self.assertEqual(reflected, list(reversed(samples[1:pad + 1])))
+
     def test_anchor_failure_leaves_all_files_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

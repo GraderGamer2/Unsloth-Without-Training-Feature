@@ -37,27 +37,46 @@ from pathlib import PurePosixPath
 
 component = sys.argv[1]
 with tarfile.open("runtime.tar", "r:") as archive:
-    seen = set()
+    seen = {}
+    links = {}
     for entry in archive:
-        parts = PurePosixPath(entry.name).parts
-        if not parts or parts[0] != component or len(parts) > 2 or ".." in parts:
+        path = PurePosixPath(entry.name)
+        parts = path.parts
+        if (entry.name != str(path) or not parts or parts[0] != component
+                or len(parts) > 2 or ".." in parts):
             raise SystemExit("Invalid runtime archive member")
         if entry.name in seen:
             raise SystemExit("Duplicate runtime archive member")
-        seen.add(entry.name)
+        seen[entry.name] = entry
         if len(parts) == 1:
             if not entry.isdir():
                 raise SystemExit("Invalid component directory")
         elif entry.issym():
             target = PurePosixPath(entry.linkname)
-            if len(target.parts) != 1 or target.name in ("", ".", "..") or target.is_absolute():
+            if (entry.linkname != str(target) or len(target.parts) != 1
+                    or target.name in ("", ".", "..") or target.is_absolute()):
                 raise SystemExit("Invalid runtime symlink")
+            links[entry.name] = str(PurePosixPath(component) / target)
         elif entry.islnk():
-            target = PurePosixPath(entry.linkname).parts
-            if len(target) != 2 or target[0] != component or ".." in target:
+            target = PurePosixPath(entry.linkname)
+            if (entry.linkname != str(target) or len(target.parts) != 2
+                    or target.parts[0] != component or ".." in target.parts):
                 raise SystemExit("Invalid runtime hard link")
+            links[entry.name] = str(target)
         elif not entry.isfile():
             raise SystemExit("Unexpected runtime archive member type")
+    # Every link must resolve to a regular file within this archive; reject
+    # dangling links, directory targets and cycles before extraction.
+    for name in links:
+        target = name
+        visited = set()
+        while target in links:
+            if target in visited:
+                raise SystemExit("Cyclic runtime link")
+            visited.add(target)
+            target = links[target]
+        if target not in seen or not seen[target].isfile():
+            raise SystemExit("Unresolved runtime link")
 PY
     local scratch
     scratch=$(mktemp -d) || exit 1
@@ -77,8 +96,17 @@ case "$mode" in
     unpack)
         verify
         mkdir -p "$dest"
-        tar -xf "$archive/runtime.tar" -C "$dest"
-        check_tree "$dest"
+        # Never merge a verified archive into a possibly stale component or
+        # follow a pre-existing component symlink. Extract in a fresh sibling.
+        if [[ -e "$dest/$component" || -L "$dest/$component" ]]; then
+            echo "Runtime destination already exists: $dest/$component" >&2
+            exit 1
+        fi
+        scratch=$(mktemp -d "$dest/.runtime-unpack.XXXXXX")
+        trap 'rm -rf "$scratch"' EXIT
+        tar -xf "$archive/runtime.tar" -C "$scratch"
+        check_tree "$scratch"
+        mv -T -- "$scratch/$component" "$dest/$component"
         ;;
     *) exit 2;;
 esac

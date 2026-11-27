@@ -32,6 +32,12 @@ WHISPER = (
     ("src/whisper.cpp", "    // Otherwise fft_out are all zero\n    double sum = log10(1e-10);\n    for (; i < mel.n_len; i += n_threads) {\n        for (int j = 0; j < mel.n_mel; j++) {\n            mel.data[j * mel.n_len + i] = sum;\n        }\n    }", "    // The parent fills the contiguous silent tail after all FFT workers join."),
     ("src/whisper.cpp", "    // clamping and normalization\n    double mmax = -1e20;", "    // The workers computed every frame before this boundary. Fill the\n    // remaining frames row-wise instead of interleaving writes across threads.\n    const int samples_for_fft = n_samples + stage_2_pad;\n    const int silent_begin = std::min(samples_for_fft / frame_step + 1, mel.n_len);\n    const float silent_value = log10(1e-10);\n    for (int j = 0; j < mel.n_mel; ++j) {\n        auto row = mel.data.begin() + j * mel.n_len;\n        std::fill(row + silent_begin, row + mel.n_len, silent_value);\n    }\n\n    // clamping and normalization\n    double mmax = -1e20;"),
 )
+# Bounds checks for the pinned PCM preprocessing path.
+WHISPER += (
+    ("src/whisper.cpp", "    // Calculate the length of padding\n    int64_t stage_1_pad = WHISPER_SAMPLE_RATE * 30;", "    if (samples == nullptr || n_samples <= 0 || n_threads <= 0) {\n        return false;\n    }\n\n    // Calculate the length of padding\n    int64_t stage_1_pad = WHISPER_SAMPLE_RATE * 30;"),
+    ("src/whisper.cpp", "    // reflective pad 200 samples at the beginning of audio\n    std::reverse_copy(samples + 1, samples + 1 + stage_2_pad, samples_padded.begin());", "    // Reflect the available input, including the conceptual zero padding\n    // beyond its end. Do not read past very short PCM buffers.\n    const int64_t reflect_count = std::min<int64_t>(stage_2_pad, n_samples - 1);\n    std::reverse_copy(samples + 1, samples + 1 + reflect_count,\n                      samples_padded.begin() + stage_2_pad - reflect_count);"),
+)
+
 DIFFUSION = (
     ("src/tokenizers/tokenizer.cpp", "            text += piece + \" \";", "            text += piece;\n            text.push_back(' ');"),
     ("src/tokenizers/tokenizer.cpp", """    std::regex pattern(R"( ,)");
