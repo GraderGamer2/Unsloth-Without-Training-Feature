@@ -191,6 +191,55 @@ class ThroughputTests(unittest.TestCase):
             self.assertEqual(count([msg]), max(1, wide + runs//2 + (len(t)-wide-runs)//4))
             self.assertEqual(count([msg], dense_ascii=True), max(1, wide+(len(t)-wide)//2))
 
+    def test_rolling_fit_reuses_only_builtin_estimates(self):
+        import runpy
+        from pathlib import Path
+        from unittest.mock import patch
+        ns = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                "core/inference/context_window.py"))
+        fit = ns["fit_rolling_context"]
+        estimate = ns["estimate_message_tokens"]
+        messages = [{"role": "system", "content": "system"}] + [
+            {"role": role, "content": f"{i} " + "x" * 80}
+            for i in range(60) for role in ("user", "assistant")
+        ]
+        # Force several eviction passes without a tokenizer dependency.
+        def count(items):
+            return 1000 if len(items) > 5 else 20
+        options = dict(context_length=1000, max_tokens=100, count_tokens=count)
+        with patch.object(json, "dumps", wraps=json.dumps) as serializations:
+            expected = fit(messages, estimate_message=lambda m: estimate(m), **options)
+            before = serializations.call_count
+        with patch.object(json, "dumps", wraps=json.dumps) as serializations:
+            actual = fit(messages, **options)
+            after = serializations.call_count
+        self.assertEqual(actual, expected)
+        self.assertTrue(actual[1]["fits"])
+        self.assertLess(after, before)
+        self.assertEqual(len(messages), 121)
+
+    def test_single_call_compaction_preserves_other_sites(self):
+        import runpy
+        from pathlib import Path
+        ns = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+                                "core/inference/context_window.py"))
+        args = json.dumps({"code": "x" * 12000})
+        def assistant():
+            return {"role": "assistant", "tool_calls": [
+                {"id": "call_0", "function": {"name": "python", "arguments": args}}]}
+        earlier, latest = assistant(), assistant()
+        messages = [earlier, {"role": "tool", "tool_call_id": "call_0", "content": "ok"},
+                    latest, {"role": "tool", "tool_call_id": "call_0", "content": "ok"}]
+        result = ns["compact_executed_call_arguments"](messages, "call_0")
+        self.assertIs(result[0], earlier)
+        self.assertIs(result[1], messages[1])
+        self.assertIs(result[3], messages[3])
+        self.assertIsNot(result[2], latest)
+        self.assertEqual(latest["tool_calls"][0]["function"]["arguments"], args)
+        compacted = result[2]["tool_calls"][0]["function"]["arguments"]
+        self.assertLess(len(compacted), len(args))
+        self.assertIn("call already ran", compacted)
+
     def test_mistral_parsed_object_reused(self):
         fn = source_defs("core/inference/tool_call_parser.py", {"_consume_mistral_call"},
                          globals_=dict(json=json, _loads_call_object=lambda s, **_: json.loads(s)))["_consume_mistral_call"]

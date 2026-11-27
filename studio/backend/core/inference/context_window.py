@@ -632,31 +632,36 @@ def _compact_one_call(
     target = _last_index_with_call(messages, call_id)
     if target < 0:
         return messages
-    out: list[dict] = []
-    for index, message in enumerate(messages):
-        calls = message.get("tool_calls")
-        if index != target or not isinstance(calls, list) or not calls:
-            out.append(message)
+    # Only the selected assistant message can change. Copy the outer list
+    # in C rather than walking every historical message in Python.
+    out = list(messages)
+    message = messages[target]
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or not calls:
+        return out
+    call_key = str(call_id)
+    new_calls = None
+    reply = None
+    reply_loaded = False
+    for index, call in enumerate(calls):
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict) or str(call.get("id") or "") != call_key:
             continue
-        new_calls: list[dict] = []
-        changed = False
-        for call in calls:
-            function = call.get("function") if isinstance(call, dict) else None
-            if not isinstance(function, dict) or str(call.get("id") or "") != str(call_id):
-                new_calls.append(call)
-                continue
-            replacement = _compacted_arguments(
-                str(function.get("name") or ""),
-                function.get("arguments"),
-                phrase,
-                reply = _reply_for_call(messages, call_id),
-            )
-            if replacement is None:
-                new_calls.append(call)
-                continue
-            new_calls.append({**call, "function": {**function, "arguments": replacement}})
-            changed = True
-        out.append({**message, "tool_calls": new_calls} if changed else message)
+        if not reply_loaded:
+            reply = _reply_for_call(messages, call_id)
+            reply_loaded = True
+        replacement = _compacted_arguments(
+            str(function.get("name") or ""),
+            function.get("arguments"),
+            phrase,
+            reply = reply,
+        )
+        if replacement is not None:
+            if new_calls is None:
+                new_calls = list(calls)
+            new_calls[index] = {**call, "function": {**function, "arguments": replacement}}
+    if new_calls is not None:
+        out[target] = {**message, "tool_calls": new_calls}
     return out
 
 
@@ -958,6 +963,29 @@ def fit_rolling_context(
 
     if on_evict is not None and current_tokens > trim_target:
         on_evict()
+
+    # Exact counts still use the live tokenizer. Only the pure built-in JSON
+    # estimates are reused, within this fit, across repeated eviction passes.
+    # Keep message references with the estimates: a synthetic bridge message
+    # can be discarded and its identity reused in a later pass.
+    if current_tokens > trim_target and (
+        estimate_message is estimate_message_tokens
+        or estimate_message is estimate_message_tokens_without_unpriced_media
+    ):
+        uncached_estimate = estimate_message
+        estimates: dict[int, tuple[dict, int]] = {}
+
+        def cached_estimate(message: dict) -> int:
+            key = id(message)
+            entry = estimates.get(key)
+            if entry is not None and entry[0] is message:
+                return entry[1]
+            value = uncached_estimate(message)
+            estimates[key] = (message, value)
+            return value
+
+        estimate_message = cached_estimate
+
     while current_tokens > trim_target:
         keep_ratio = trim_target / max(1, current_tokens)
         if min_bite:

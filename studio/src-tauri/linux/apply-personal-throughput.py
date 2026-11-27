@@ -194,6 +194,36 @@ LLAMA = [
 ]
 
 
+# Pinned llama.cpp batch, history and speculative sampling hot paths.
+LLAMA += [
+  [
+    "src/llama-batch.cpp",
+    "    std::vector<seq_set_t> cur_seq_set;\n\n    llama_seq_id last_seq_id = -1;",
+    "    std::vector<seq_set_t> cur_seq_set;\n    seq_set_t occupied_seqs{};\n\n    llama_seq_id last_seq_id = -1;"
+  ],
+  [
+    "src/llama-batch.cpp",
+    "        bool add = true;\n\n        for (uint32_t s = 0; s < cur_seq_set.size(); ++s) {\n            // no overlap with existing sequence sets:\n            if (!(cur_seq_set[s] & seq_set[i]).none()) {\n                add = false;\n                break;\n            }\n        }",
+    "        // Disjoint from every selected set iff disjoint from their union.\n        // This replaces the per-candidate scan with one fixed-size bitset test.\n        bool add = (occupied_seqs & seq_set[i]).none();"
+  ],
+  [
+    "src/llama-batch.cpp",
+    "            cur_seq_set.push_back(seq_set[i]);\n\n            last_seq_id = batch.seq_id[i][0];",
+    "            cur_seq_set.push_back(seq_set[i]);\n            occupied_seqs |= seq_set[i];\n\n            last_seq_id = batch.seq_id[i][0];"
+  ],
+  [
+    "src/llama-kv-cache.cpp",
+    "        const llama_seq_id seq_id = ubatch.seq_id[i][0];\n\n        for (uint32_t j = 0; j < n; ++j) {\n            const llama_pos d = (llama_pos) (n - j);\n\n            llama_pos p;\n            if (by_order) {\n                const auto & v = seq_idx[seq_id];",
+    "        const llama_seq_id seq_id = ubatch.seq_id[i][0];\n        // The index is invariant across all n predecessors of this token.\n        const auto * indices = by_order ? &seq_idx.at(seq_id) : nullptr;\n\n        for (uint32_t j = 0; j < n; ++j) {\n            const llama_pos d = (llama_pos) (n - j);\n\n            llama_pos p;\n            if (by_order) {\n                const auto & v = *indices;"
+  ],
+  [
+    "common/sampling.cpp",
+    "        // rejected: tokens outside q's support keep all of p\n        residual.clear();\n        float sum = 0.0f;\n        for (size_t k = 0; k < cur_p->size; ++k) {\n            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);",
+    "        // Rejection is the only path that needs all draft probabilities.\n        // For large supports index q once instead of scanning it for every\n        // target candidate. emplace preserves prob_of's first-match semantics.\n        std::unordered_map<llama_token, float> q_probs;\n        if (q.size() >= 32 && cur_p->size >= 32) {\n            q_probs.reserve(q.size());\n            for (const auto & e : q) {\n                q_probs.emplace(e.id, e.p);\n            }\n        }\n        const auto q_probability = [&](llama_token id) {\n            if (q_probs.empty()) {\n                return prob_of(q.data(), q.size(), id);\n            }\n            const auto it = q_probs.find(id);\n            return it == q_probs.end() ? 0.0f : it->second;\n        };\n\n        // rejected: tokens outside q's support keep all of p\n        residual.clear();\n        float sum = 0.0f;\n        for (size_t k = 0; k < cur_p->size; ++k) {\n            const float r = p_of(k) - q_probability(cur_p->data[k].id);"
+  ]
+]
+
+
 def patch_specs(component):
     if component not in ("llama", "diffusion", "whisper", "audio"):
         raise ValueError(component)

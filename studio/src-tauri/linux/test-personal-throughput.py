@@ -62,6 +62,44 @@ class ThroughputTests(unittest.TestCase):
                                         actual = cached if reuse else expected
                                         self.assertEqual(actual, expected)
 
+    def test_sequence_set_union_matches_pairwise_selection(self):
+        import random
+        rng = random.Random(7735)
+        for _ in range(1000):
+            chosen, occupied = [], 0
+            last = -1
+            sequential = bool(rng.randrange(2))
+            for _ in range(128):
+                candidate = sum(1 << bit for bit in set(
+                    rng.randrange(256) for _ in range(rng.randrange(8))))
+                seq_id = rng.randrange(16)
+                allowed = not sequential or not chosen or seq_id == last + 1
+                before = allowed and all(not (s & candidate) for s in chosen)
+                after = allowed and not (occupied & candidate)
+                self.assertEqual(bool(before), bool(after))
+                if after:
+                    chosen.append(candidate)
+                    occupied |= candidate
+                    last = seq_id
+
+    def test_rejection_probability_index_first_match(self):
+        import random
+        rng = random.Random(7735)
+        for _ in range(1000):
+            q = [(rng.randrange(256), rng.random()) for _ in range(rng.randrange(128))]
+            p = [(rng.randrange(256), rng.random()) for _ in range(rng.randrange(128))]
+            lookup = {}
+            if len(q) >= 32 and len(p) >= 32:
+                for token, prob in q:
+                    lookup.setdefault(token, prob)
+            def scan(token):
+                return next((prob for ident, prob in q if ident == token), 0.0)
+            before = [max(0.0, prob - scan(token)) for token, prob in p]
+            after = [max(0.0, prob - (lookup.get(token, 0.0) if lookup else scan(token)))
+                     for token, prob in p]
+            self.assertEqual(before, after)
+            self.assertEqual(sum(before), sum(after))
+
     def test_ring_indices(self):
         for cap in range(1,65):
             for first in range(cap):

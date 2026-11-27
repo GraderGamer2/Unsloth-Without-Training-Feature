@@ -1016,7 +1016,7 @@ def _search_compatible_dense(conn, scope, query, embedding_model, untagged):
         "SELECT c.id FROM chunks c JOIN documents d ON d.id=c.document_id "
         f"WHERE c.scope=? AND {_COMPATIBLE_CHUNKS})) ORDER BY distance",
         (scope, query, _MAX_DENSE_FETCH, scope, scope, embedding_model, embedding_model, untagged),
-    ).fetchall()
+    )
     return [
         (r["chunk_id"], 1.0 - r["distance"])
         for r in rows
@@ -1099,7 +1099,7 @@ def all_chunks_for_scope(conn: sqlite3.Connection, scope) -> list[dict]:
         f"(SELECT 1 FROM linked_folder_files ff WHERE ff.document_id=d.id)) "
         f"ORDER BY d.created_at, c.document_id, c.chunk_index",
         list(scopes),
-    ).fetchall()
+    )
     return [dict(r) for r in rows]
 
 
