@@ -465,7 +465,7 @@ def add_chunks(
         )
     if len(vectors):
         rag_db.ensure_vec(conn, len(vectors[0]), document_id)
-    epoch_before = vec_cache.read_epoch(conn, scope) if vec_cache.enabled() else None
+    epoch_before = vec_cache.read_epoch(conn, scope) if vec_cache.enabled_for_scope(scope) else None
     vec_rowids: list[int] = []
     chunk_rowids: list[int] = []
     for i, (chunk, vector) in enumerate(zip(chunks, vectors)):

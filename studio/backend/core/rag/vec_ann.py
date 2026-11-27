@@ -142,7 +142,7 @@ def with_delta(np, ann: Ann, keys, rows) -> Ann:
 
 def search(np, ann: Ann, q, fetch: int):
     """(keys int64, cosine distances float64) of the ``fetch`` nearest, ascending, ties by key. ``q`` is unit."""
-    f = min(int(fetch), ann.size)
+    f = min(max(0, int(fetch)), ann.size)
     keys, dist = [], []
     if ann.n and f:
         # Near-full fetches (widening) brute-force the stored rows: no graph reachability limit.

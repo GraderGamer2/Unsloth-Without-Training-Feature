@@ -38,10 +38,16 @@ def enabled() -> bool:
     return os.environ.get("RAG_VEC_CACHE", "1") != "0" and _budget() > 0
 
 
+def enabled_for_scope(scope: str) -> bool:
+    # Deep research creates a unique throwaway scope for each ranking request.
+    # A background build can outlive deletion, retaining dead matrices or ANN files.
+    return not scope.startswith("research_scrape_") and enabled()
+
+
 def _budget() -> int:
     try:
         return int(float(os.environ.get("RAG_VEC_CACHE_MB", "256")) * 1024 * 1024)
-    except ValueError:
+    except (ValueError, OverflowError):
         return 0
 
 
@@ -192,7 +198,7 @@ def _publish(
 def search(conn, db_file: str, scope: str, vector, fetch: int):
     """(rows, cap, complete) from the cache at this snapshot's epoch, else None (and a build is queued).
     ``complete``: rows already hold every vector in the scope, so no wider search can add one."""
-    if not enabled():
+    if not enabled_for_scope(scope):
         return None
     np = _np()
     if np is None:
@@ -233,10 +239,22 @@ def search(conn, db_file: str, scope: str, vector, fetch: int):
         return None
 
 
-def _top(np, scores, f: int):
-    """Indices of the ``f`` largest scores, unordered."""
+def _top(np, scores, f: int, rowids):
+    """Top scores, resolving ties at the cutoff by ascending rowid."""
     m = len(scores)
-    return np.argpartition(scores, m - f)[m - f :] if f < m else np.arange(m)
+    if f <= 0:
+        return np.empty(0, dtype = np.int64)
+    if f >= m:
+        return np.arange(m)
+    selected = np.argpartition(scores, m - f)[m - f :]
+    cutoff = scores[selected].min()
+    higher = selected[scores[selected] > cutoff]
+    remaining = f - len(higher)
+    tied = np.flatnonzero(scores == cutoff)
+    if len(tied) > remaining:
+        smallest = np.argpartition(rowids[tied], remaining - 1)[:remaining]
+        tied = tied[smallest]
+    return np.concatenate((higher, tied))
 
 
 def _search_entry(np, entry: _Entry, vector, fetch: int):
@@ -247,10 +265,12 @@ def _search_entry(np, entry: _Entry, vector, fetch: int):
         return [], n, True
     q /= qn
     store = entry.store
-    f = min(int(fetch), n)
+    f = min(max(0, int(fetch)), n)
+    if not f:
+        return [], n, False
     if n <= _BLOCK:
         scores = store.mat[:n] @ q
-        idx = _top(np, scores, f)
+        idx = _top(np, scores, f, store.rowids[:n])
         best = scores[idx]
     else:
         buf = np.empty(_BLOCK, dtype = np.float32)
@@ -260,11 +280,11 @@ def _search_entry(np, entry: _Entry, vector, fetch: int):
         for s0 in range(0, n, _BLOCK):
             out = buf[: min(n, s0 + _BLOCK) - s0]
             np.matmul(store.mat[s0 : s0 + len(out)], q, out = out)
-            part = _top(np, out, min(f, len(out)))
+            part = _top(np, out, min(f, len(out)), store.rowids[s0 : s0 + len(out)])
             idx = np.concatenate([idx, part + s0])
             best = np.concatenate([best, out[part]])
             if len(best) > f:
-                keep = _top(np, best, f)
+                keep = _top(np, best, f, store.rowids[idx])
                 idx, best = idx[keep], best[keep]
     # Same order vec0 gives: distance ascending, ties by rowid.
     order = np.lexsort((store.rowids[idx], -best))
@@ -357,7 +377,7 @@ def note_append(
 ) -> None:
     """After a committed pure append: extend the entry iff this writer's rows are the only change since
     ``before``. ``appended``: chunks rows in the scope newer than before's max rowid, read under the write lock."""
-    if not enabled() or before is None or after is None or not rowids:
+    if not enabled_for_scope(scope) or before is None or after is None or not rowids:
         return
     np = _np()
     if np is None:

@@ -551,68 +551,89 @@ class AudioCppServer:
     ) -> "AudioCppServer":
         """One launch on a fresh port and config dir; ``_LostPortError`` if another process took the port."""
         config_dir = Path(tempfile.mkdtemp(prefix = "unsloth-audiocpp-"))
-        reservation, port = _reserve_free_port()
-        config = {
-            "host": "127.0.0.1",
-            "port": port,
-            "backend": backend,
-            "lazy_load": False,
-            "max_loaded_models": 1,
-            # Music generation can take minutes; the owner bounds its own wait and cancels.
-            "busy_timeout_ms": 0,
-            "models": [entry],
-        }
-        config_path = config_dir / "server.json"
-        config_path.write_text(json.dumps(config), encoding = "utf-8")
-        log_path = config_dir / "server.log"
-        command = [binary, "--config", str(config_path), "--no-ui"]
-        threads = _cpu_threads()
-        if threads is None and backend != "cpu":
-            # The runtime default (every core) thrashes on many-core hosts.
-            threads = min(os.cpu_count() or 1, _GPU_HOST_THREADS)
-        if threads:
-            command += ["--threads", str(threads)]
-        logger.info(
-            "Starting audiocpp_server (%s, %s) for %s on 127.0.0.1:%s",
-            model.family,
-            backend,
-            model.id,
-            port,
-        )
-        if is_process_shutting_down():
-            reservation.close()
-            shutil.rmtree(config_dir, ignore_errors = True)
-            raise AudioCppStartCancelledError(
-                "Unsloth is shutting down; not starting audiocpp_server."
+        reservation = None
+        try:
+            reservation, port = _reserve_free_port()
+            config = {
+                "host": "127.0.0.1",
+                "port": port,
+                "backend": backend,
+                "lazy_load": False,
+                "max_loaded_models": 1,
+                # Music generation can take minutes; the owner bounds its own wait and cancels.
+                "busy_timeout_ms": 0,
+                "models": [entry],
+            }
+            config_path = config_dir / "server.json"
+            config_path.write_text(json.dumps(config), encoding = "utf-8")
+            log_path = config_dir / "server.log"
+            command = [binary, "--config", str(config_path), "--no-ui"]
+            threads = _cpu_threads()
+            if threads is None and backend != "cpu":
+                # The runtime default (every core) thrashes on many-core hosts.
+                threads = min(os.cpu_count() or 1, _GPU_HOST_THREADS)
+            if threads:
+                command += ["--threads", str(threads)]
+            logger.info(
+                "Starting audiocpp_server (%s, %s) for %s on 127.0.0.1:%s",
+                model.family,
+                backend,
+                model.id,
+                port,
             )
-        env = child_env(binary)
-        if model.family in _NO_CUDA_GRAPH_FAMILIES:
-            env.setdefault("GGML_CUDA_DISABLE_GRAPHS", "1")
-        # Released as late as possible: the server binds the port moments after this close.
-        reservation.close()
-        try:
-            output = nullcontext(subprocess.PIPE) if personal_vulkan() else open(log_path, "wb")
-            with output as log:
-                process = subprocess.Popen(
-                    command,
-                    stdout = log,
-                    stderr = subprocess.STDOUT,
-                    stdin = subprocess.DEVNULL,
-                    env = env,
-                    cwd = str(config_dir),
-                    **child_popen_kwargs(),
+            if is_process_shutting_down():
+                raise AudioCppStartCancelledError(
+                    "Unsloth is shutting down; not starting audiocpp_server."
                 )
-        except OSError as exc:
-            # A corrupt, quarantined or wrong-architecture binary: report it like any other runtime failure.
-            shutil.rmtree(config_dir, ignore_errors = True)
-            raise AudioCppUnavailableError(
-                f"The audio runtime could not be started: {exc}"
-            ) from exc
-        adopt_pid(process.pid)
-        if on_process is not None:
-            on_process(process)
-        server = cls(process, port, model, model_id, backend, config_dir)
+            env = child_env(binary)
+            if model.family in _NO_CUDA_GRAPH_FAMILIES:
+                env.setdefault("GGML_CUDA_DISABLE_GRAPHS", "1")
+            # Release once, as late as possible before the child binds.
+            reserved, reservation = reservation, None
+            reserved.close()
+            try:
+                output = nullcontext(subprocess.PIPE) if personal_vulkan() else open(log_path, "wb")
+                with output as log:
+                    process = subprocess.Popen(
+                        command,
+                        stdout = log,
+                        stderr = subprocess.STDOUT,
+                        stdin = subprocess.DEVNULL,
+                        env = env,
+                        cwd = str(config_dir),
+                        **child_popen_kwargs(),
+                    )
+            except OSError as exc:
+                raise AudioCppUnavailableError(
+                    f"The audio runtime could not be started: {exc}"
+                ) from exc
+        except BaseException:
+            try:
+                if reservation is not None:
+                    reservation.close()
+            finally:
+                shutil.rmtree(config_dir, ignore_errors = True)
+            raise
+
+        # Construct the owner before notifying callbacks, so callback failures
+        # take the normal stop path (including draining the personal output pipe).
         try:
+            adopt_pid(process.pid)
+            server = cls(process, port, model, model_id, backend, config_dir)
+        except BaseException:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout = 120)
+                forget_pid(process.pid)
+            finally:
+                if process.stdout is not None:
+                    process.stdout.close()
+                shutil.rmtree(config_dir, ignore_errors = True)
+            raise
+        try:
+            if on_process is not None:
+                on_process(process)
             if is_process_shutting_down():
                 raise AudioCppStartCancelledError(
                     "Unsloth is shutting down; not starting audiocpp_server."

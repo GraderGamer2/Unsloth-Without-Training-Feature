@@ -247,6 +247,102 @@ class FastPathsTest(unittest.TestCase):
         asyncio.run(check())
 
 
+class RagCorrectnessTests(unittest.TestCase):
+    def test_transient_scopes_never_schedule_vector_caches(self):
+        ns = source_defs("core/rag/vec_cache.py", {"enabled_for_scope", "_budget"},
+                         globals_=dict(os=os, enabled=lambda: True))
+        self.assertFalse(ns["enabled_for_scope"]("research_scrape_" + "a" * 32))
+        self.assertTrue(ns["enabled_for_scope"]("persistent-knowledge-base"))
+        for value in ("inf", "-inf", "nan", "bad"):
+            with patch.dict(os.environ, {"RAG_VEC_CACHE_MB": value}):
+                self.assertEqual(ns["_budget"](), 0)
+
+    def test_vector_cutoff_ties_choose_lowest_rowids(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy not installed")
+        top = source_defs("core/rag/vec_cache.py", {"_top"})["_top"]
+        rng = random.Random(680)
+        for _ in range(250):
+            n = rng.randrange(1, 150)
+            scores = np.array([rng.randrange(4) for _ in range(n)], dtype=np.float32)
+            rowids = np.array(rng.sample(range(1, 10000), n), dtype=np.int64)
+            k = rng.randrange(n + 1)
+            expected = sorted(range(n), key=lambda i: (-scores[i], rowids[i]))[:k]
+            actual = top(np, scores, k, rowids)
+            self.assertCountEqual(actual.tolist(), expected)
+
+
+class AudioStartupTests(unittest.TestCase):
+    def test_setup_and_callback_failures_release_audio_resources(self):
+        import json
+        import shutil
+        from contextlib import nullcontext
+
+        class Unavailable(RuntimeError):
+            pass
+
+        reservations, directories, stopped, adopted = [], [], [], []
+        class Reservation:
+            closed = False
+            def close(self):
+                if self.closed:
+                    raise AssertionError("reservation closed twice")
+                self.closed = True
+
+        def reserve():
+            reservation = Reservation()
+            reservations.append(reservation)
+            return reservation, 12345
+
+        with tempfile.TemporaryDirectory() as root:
+            def mkdtemp(**kwargs):
+                directory = tempfile.mkdtemp(dir=root, **kwargs)
+                directories.append(Path(directory))
+                return directory
+
+            process = SimpleNamespace(pid=42, stdout=None)
+            class Server:
+                def __init__(self, process, port, model, model_id, backend, config_dir):
+                    self.config_dir = config_dir
+                def stop(self):
+                    stopped.append(self.config_dir)
+                    shutil.rmtree(self.config_dir)
+
+            ns = source_defs("core/inference/audio_cpp_server.py", {"_start_once"},
+                             class_name="AudioCppServer",
+                             globals_=dict(Path=Path, tempfile=SimpleNamespace(mkdtemp=mkdtemp),
+                                           json=json, os=os, shutil=shutil, nullcontext=nullcontext,
+                                           AudioCppModel=object, Optional=Optional,
+                                           Any=__import__("typing").Any, threading=__import__("threading"),
+                                           _reserve_free_port=reserve, _cpu_threads=lambda: 1,
+                                           _NO_CUDA_GRAPH_FAMILIES=set(), logger=SimpleNamespace(info=lambda *a: None),
+                                           is_process_shutting_down=lambda: False, child_env=lambda _: {},
+                                           child_popen_kwargs=lambda: {}, personal_vulkan=lambda: True,
+                                           subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, DEVNULL=-3,
+                                                                      Popen=lambda *a, **k: process),
+                                           adopt_pid=adopted.append, AudioCppUnavailableError=Unavailable))
+            start = ns["_start_once"]
+            model = SimpleNamespace(family="test", id="test")
+            with self.assertRaises(TypeError):
+                start(Server, model, "model", "cpu", "binary", {"bad": object()}, None, None)
+            self.assertTrue(reservations[-1].closed)
+            self.assertFalse(directories[-1].exists())
+            self.assertFalse(adopted)
+
+            def fail_callback(child):
+                self.assertIs(child, process)
+                raise RuntimeError("callback failed")
+
+            with self.assertRaisesRegex(RuntimeError, "callback failed"):
+                start(Server, model, "model", "cpu", "binary", {}, None, fail_callback)
+            self.assertTrue(reservations[-1].closed)
+            self.assertEqual(adopted, [42])
+            self.assertEqual(stopped, [directories[-1]])
+            self.assertFalse(directories[-1].exists())
+
+
 class LifecycleTests(unittest.TestCase):
     def test_response_close_error_still_closes_lines(self):
         ns = runpy.run_path(str(BACKEND / "core/inference/http_stream.py"))
