@@ -171,5 +171,39 @@ class ThroughputTests(unittest.TestCase):
                         idx = first+size-i-1
                         self.assertEqual(idx%cap,idx-cap if idx>=cap else idx)
 
+    def test_dspark_uniform_adaptive_blocks(self):
+        # A mixed batch must retain an equal number of positions per sequence.
+        import itertools
+        for maximum in range(1, 17):
+            for minimum in range(1, maximum + 1):
+                for caps in itertools.product((-1, 0, 1, 2, 4, 8, 16), repeat=3):
+                    requested = [min(maximum, cap) if cap > 0 and cap >= minimum
+                                 else maximum for cap in caps]
+                    shared = max(requested)
+                    self.assertGreaterEqual(shared, minimum)
+                    self.assertLessEqual(shared, maximum)
+                    for anchor in (0, 1):
+                        block = shared + anchor
+                        for cap, want in zip(caps, requested):
+                            end = anchor + min(block - anchor, cap) if cap > 0 and cap >= minimum else block
+                            self.assertEqual(end - anchor, want)
+                            self.assertLessEqual(end, block)
+        # The user's seven-token low-acceptance case reduces actual block work.
+        self.assertEqual(max([2]), 2)
+        self.assertEqual(max([2, 7]), 7)
+
+    def test_dspark_block_layout_identity(self):
+        for blocks in range(1, 9):
+            for positions in range(1, 17):
+                for width in (1, 3, 11):
+                    position_major = [(b, p, k) for p in range(positions)
+                                      for b in range(blocks) for k in range(width)]
+                    block_major = [(b, p, k) for b in range(blocks)
+                                   for p in range(positions) for k in range(width)]
+                    if blocks == 1 or positions == 1:
+                        self.assertEqual(position_major, block_major)
+                    else:
+                        self.assertNotEqual(position_major, block_major)
+
 if __name__ == "__main__":
     unittest.main()

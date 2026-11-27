@@ -229,7 +229,7 @@ LLAMA += [
   [
     "tools/server/server-context.cpp",
     "                const int n_draft_max = slot.get_n_draft_max();\n\n                if (n_draft_max > 0) {",
-    "                int n_draft_max = slot.get_n_draft_max();\n\n                // Limit only fresh drafts on sequential drafters that honor\n                // the cap before decoding. Replays and synthetic tests retain\n                // the original behavior. Probe the full length every 8 rounds.\n                const auto & types = params_base.speculative.types;\n                if (n_draft_max > 0 && slot.spec_draft.empty() &&\n                    types.size() == 1 &&\n                    (types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) &&\n                    common_speculative_get_synth_probs(spec.get()).empty() &&\n                    slot.stats.n_draft_tokens >= 64 &&\n                    slot.stats.n_draft_verif_steps >= 8 &&\n                    slot.stats.n_draft_verif_steps % 8 != 0 &&\n                    int64_t(slot.stats.n_draft_accepted) * 5 < slot.stats.n_draft_tokens) {\n                    n_draft_max = std::min(n_draft_max, std::max(2, params_base.speculative.draft.n_min));\n                }\n\n                if (n_draft_max > 0) {"
+    "                int n_draft_max = slot.get_n_draft_max();\n\n                // Limit only fresh drafts on drafters that honor\n                // the cap before decoding. Replays and synthetic tests retain\n                // the original behavior. Probe the full length every 8 rounds.\n                const auto & types = params_base.speculative.types;\n                if (n_draft_max > 0 && slot.spec_draft.empty() &&\n                    types.size() == 1 &&\n                    (types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||\n                     types.front() == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) &&\n                    common_speculative_get_synth_probs(spec.get()).empty() &&\n                    slot.stats.n_draft_tokens >= 64 &&\n                    slot.stats.n_draft_verif_steps >= 8 &&\n                    slot.stats.n_draft_verif_steps % 8 != 0 &&\n                    int64_t(slot.stats.n_draft_accepted) * 5 < slot.stats.n_draft_tokens) {\n                    n_draft_max = std::min(n_draft_max, std::max(2, params_base.speculative.draft.n_min));\n                }\n\n                if (n_draft_max > 0) {"
   ],
   [
     "common/speculative.cpp",
@@ -306,6 +306,36 @@ ENGINE_EXTRA = {
   ]
 ],
 }
+
+
+# DSpark adaptive blocks and graph layout fast paths.
+LLAMA += [
+  [
+    "common/speculative.cpp",
+    "        // build one batch holding every drafting sequence's noise block into a single decode)\n        // record where each block starts and its size\n        std::vector<int32_t> i_block_beg(n_seq, -1);\n        std::vector<int32_t> n_block    (n_seq,  0);",
+    "        // DSpark's Markov head requires uniform block lengths across sequences.\n        // Choose the largest requested cap, bounded by the trained block size.\n        // If any sequence needs the original block, retain it for the entire batch.\n        int32_t dspark_n_draft = params.n_max;\n        if (is_dspark && !is_lilicorr && !is_dflash2 && params.n_max > 0) {\n            int32_t requested = 0;\n            for (const auto & dp : dparams) {\n                if (!dp.drafting) {\n                    continue;\n                }\n                const int32_t cap = dp.n_max > 0 && dp.n_max >= params.n_min\n                    ? std::min(params.n_max, dp.n_max) : params.n_max;\n                requested = std::max(requested, cap);\n            }\n            if (requested > 0) {\n                dspark_n_draft = requested;\n            }\n        }\n\n        // Keep block bookkeeping allocations across decoding rounds.\n        i_block_beg.assign(n_seq, -1);\n        n_block.assign(n_seq, 0);"
+  ],
+  [
+    "common/speculative.cpp",
+    "    // dspark speculators\n    bool sample_from_anchor = true;",
+    "    // DSpark speculators and reusable per-batch bookkeeping.\n    bool sample_from_anchor = true;\n    std::vector<int32_t> i_block_beg;\n    std::vector<int32_t> n_block;"
+  ],
+  [
+    "common/speculative.cpp",
+    "            const int32_t n_draft = params.n_max;\n            const int32_t n_block_tokens = is_lilicorr ? block_size : n_draft + (is_dspark && sample_from_anchor ? 0 : 1);",
+    "            const int32_t n_draft = is_dspark ? dspark_n_draft : params.n_max;\n            const int32_t n_block_tokens = is_lilicorr ? block_size : n_draft + (is_dspark && sample_from_anchor ? 0 : 1);"
+  ],
+  [
+    "common/speculative.cpp",
+    "                const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;\n                for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {",
+    "                const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;\n                // A longer block may be required by another sequence. Do not\n                // sample this sequence's positions that would be truncated.\n                const int32_t end = dp.n_max > 0 && dp.n_max >= params.n_min\n                    ? i_draft_beg + std::min(n_block_tokens - i_draft_beg, dp.n_max)\n                    : n_block_tokens;\n                for (int32_t i = i_draft_beg; i < end; ++i) {"
+  ],
+  [
+    "src/models/dflash.cpp",
+    "    // cat is position-major; restore ubatch block-major order\n    ggml_tensor * out = ggml_reshape_3d(ctx0, cat, n_vocab, n_blocks, block_drafts);\n    out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, block_drafts, n_blocks]\n    out = ggml_reshape_2d(ctx0, out, n_vocab, n_tok);\n\n    if (has_conf) {\n        ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, block_drafts);\n        conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));\n        conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);",
+    "    // Position-major and block-major are identical for one sequence or\n    // one position. Avoid building a redundant full-vocabulary copy.\n    const auto restore_block_order = [&](ggml_tensor * tensor, int64_t width) {\n        if (n_blocks == 1 || block_drafts == 1) {\n            return ggml_reshape_2d(ctx0, ggml_is_contiguous(tensor) ? tensor : ggml_cont(ctx0, tensor), width, n_tok);\n        }\n        ggml_tensor * ordered = ggml_reshape_3d(ctx0, tensor, width, n_blocks, block_drafts);\n        ordered = ggml_cont(ctx0, ggml_permute(ctx0, ordered, 0, 2, 1, 3));\n        return ggml_reshape_2d(ctx0, ordered, width, n_tok);\n    };\n    ggml_tensor * out = restore_block_order(cat, n_vocab);\n\n    if (has_conf) {\n        ggml_tensor * conf = restore_block_order(cat_conf, 1);"
+  ]
+]
 
 
 def patch_specs(component):
