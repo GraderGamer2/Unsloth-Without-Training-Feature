@@ -1,0 +1,98 @@
+# Personal Unsloth development roadmap
+
+Active branch: `ryzen-7735hs-vulkan`  
+Owner-approved requirements recorded: 2026-11-28  
+Read [AGENTS.md](AGENTS.md) before implementation.
+
+## 1. Current status and release gate
+
+- **Owner testing pending:** source-discovery build based on `5cd4570e2dc9bca5c8e33296e9ac4aa52ea39fe3`. Do not implement the next batch until the owner finishes testing and explicitly continues development.
+- **Owner runtime-confirmed on the preceding build:** research now produced a readable report rather than raw function invocations; source import reached the backend. The Minecraft 1.12.2 test discovered 16 sources, submitted six, and five contained actual source text. The sixth was a Reddit bot challenge page. This is not proof that all research and import paths work.
+- **Implemented, awaiting local verification in the current build:** reject common verification pages; preserve original direct PDF and supported arXiv downloads; improve topic-appropriate search prompts; show chat readiness; distinguish indexing completion from submission and permit failed-index retries. Current original PDF fetch safety cap: 32 MiB, separate from the normal local upload cap. No arbitrary total project-source limit added.
+- **Known outstanding issues:** project Sources search may wait 1–2 minutes for chat runtime initialization; showing the readiness state does not fix that latency. Web extraction is incomplete on some sites and can fail due to bot protection, access restrictions, extraction errors or network failures. General open-access PDF resolution, non-PDF original remote document imports, and automatic linked-source discovery are pending.
+- **Prior bug fixes to preserve:** reject raw synthesis tool calls and structured actions; retry synthesis using existing evidence; retain collected sources after failed/stopped research; avoid replacing a valid partial report with malformed output; ensure AppImage/frontend/backend revision compatibility; avoid HTTP 405 caused by stale backend. Keep earlier tested performance work; do not assume all optimizations are independently benchmarked.
+
+## 2. Priority and workflow
+
+1. Resolve owner-reported runtime bugs and regressions first. Diagnose rather than merely hide symptoms.
+2. Verify the current build with the owner's feedback, including readiness, report synthesis, source import and PDF behavior.
+3. Implement the research expansion below as a coherent, tested batch, reusing existing architecture.
+4. Resume broader performance work only after research and source ingestion are reliable.
+
+Maintain this roadmap with actual progress and verification evidence after each batch. A successful build is not equivalent to a successful test on the owner's machine.
+
+## 3. Research modes — exactly two
+
+Both the main chat and the project Sources search bar expose:
+- **Deep Research (default):** thorough, targeted discovery and verification with reasonable resource usage; follow relevant links and acquire useful documents.
+- **Exhaustive Research:** substantially broader discovery, recursive exploration, more follow-up queries and source verification, until evidence coverage and diminishing returns justify stopping, the configured resource budget is reached, or the user stops it.
+
+No Fast Research mode. Do not silently reduce Deep Research to a shallow search.
+
+Both modes use automatic query expansion, complementary search providers, academic discovery where relevant, relevant linked-source discovery, source deduplication, extraction, semantic relevance filtering and evidence verification. Exhaustive mode must not stop merely because a small model emits a finish action; independently evaluate progress, missing dimensions and new relevant evidence. Keep time/network/memory limits configurable and transparent; distinguish per-run safety budgets from persistent source capacity. No arbitrary new cap on total project sources.
+
+## 4. Research orchestration and quality
+
+- Let the selected LLM identify the question, research dimensions and search intent, but use deterministic backend logic for discovery, fetching, validation, deduplication, and progress/coverage checks where possible. Make the pipeline useful with small local models (e.g. MiniCPM or Spark); no mandatory larger model.
+- Use topic-appropriate sources. For practical software questions prioritize maintained projects, release notes, source documentation, benchmarks and relevant community posts; do not force academic publications or official endorsement. For academic questions discover papers, DOI metadata, publisher/repository pages and legitimate open full text.
+- Explore multiple complementary public search providers. Evaluate OpenAlex, Crossref, Unpaywall and other appropriate open academic services, respecting their current authentication, attribution, usage and rate-limit requirements. No mandatory paid API or user-secret exposure.
+- Follow relevant links recursively, discover downloadable documents and useful media, and pursue missing dimensions. Rank by relevance, recency where requested, source quality, accessibility and evidence coverage, not merely authority or search-result order.
+- Use the existing configured embedding model (the owner uses Granite; confirm exact variant and capabilities) for semantic relevance and retrieval where feasible. Keep lexical matching and provenance as complementary signals. Avoid embedding irrelevant candidates or re-embedding unchanged data.
+- Deduplicate normalized URLs and actual content while preserving useful provenance; avoid repeated visits and loops. Respect query privacy and website access policy throughout, including redirects and discovered links.
+- On access denial, bot protection or failed extraction, seek legitimate accessible alternatives, such as public APIs, project repositories, open repositories or author copies. Do not bypass paywalls, authentication or bot protection.
+- Distinguish discovered links, snippets, actual fetched content, extraction failures and indexed documents. Never present a snippet, challenge page, AI summary or fabricated text as the original source. Report coverage gaps honestly, not unsupported claims that sources do not exist.
+- Preserve cancellation, partial findings, source import after failed/stopped runs, and bounded synthesis recovery. Invalid tool markup must never be marked as a completed research report.
+
+## 5. Source discovery and original file ingestion
+
+Extend the existing Unsloth project Sources panel and Deep Research engine, not a second NotebookLM-style architecture. A user enters a topic, researches, reviews discovered sources and chooses which become permanent project sources. Allow additional imports across runs, manual additions/removals using existing controls, retry of failed imports, and no new project-wide source-count quota.
+
+Support relevant accessible formats through existing native parsers and ingestion where possible:
+- HTML/webpages: extract useful main content, tables and relevant links; remove navigation/ads/challenge pages.
+- PDF and academic papers: discover legitimate full-text links (including DOI and publisher landing pages), download original documents and preserve page-aware parsing/OCR.
+- Word DOC/DOCX; Excel XLS/XLSX; PowerPoint PPT/PPTX; CSV/TSV; OpenDocument ODT/ODS/ODP; EPUB; plain text/Markdown; JSON/XML and relevant code/config files. Preserve native document structure, sheets/tables/slides/headings and notes where supported by the parser.
+- GitHub: relevant README, release notes, documentation, issues and source files; community discussions: actual posts and relevant replies via permitted access.
+- Relevant images, charts, diagrams and screenshots: preserve originals and process according to available capabilities (section 6).
+
+Detect actual format by safe content signatures and MIME type, not URL extension alone. Reuse safe download/redirect and native upload/parse limits; support configurable bounded downloads and avoid unnecessary memory copies. Preserve source URL, title, retrieval time, content type and original file association where feasible. Original downloads should go through the same ingestion and embedding path as local uploads. Clearly disclose unsupported formats and partial extraction.
+
+Keep source collection separate from permission to persist into a project: user-selected sources are imported; discovery alone must not silently populate the permanent knowledge base. Temporary research evidence must remain usable without creating unwanted permanent documents.
+
+## 6. Images, OCR, vision and embedding capabilities
+
+Detect capabilities of the actual loaded/configured models and available local OCR tools, rather than assuming a model can process images.
+- Vision-capable model: extract useful visual descriptions, charts, diagram relationships and visible text where supported.
+- Local OCR available: extract visible text even with a text-only chat model; make clear when only OCR, not visual interpretation, was performed.
+- Compatible multimodal embedding model AND retrieval support: use image embeddings when the existing architecture genuinely supports them. A standard Granite text embedding model can index extracted text/descriptions, not raw pixels.
+- No usable vision or OCR: warn explicitly; preserve/download the original image if accessible and safe, label it as downloaded but not content-indexed. Never invent an image description or imply successful OCR.
+- Apply equivalent checks to scanned PDFs, embedded images and document charts. Preserve readable text even if visual components cannot be interpreted.
+- Permit reprocessing later with a compatible model. Never download additional AI models without the owner's permission. An unsupported image must not fail the entire run.
+
+Show meaningful per-source states: discovered, downloading, extracted, submitted/indexing, indexed, OCR-only, downloaded/not indexed, inaccessible, unsupported, failed/retryable. Preserve originals and source provenance; distinguish a stored image from retrievable evidence.
+
+## 7. Stability, efficiency and compatibility
+
+- Fix the project-home readiness bottleneck by tracing runtime initialization and safe composer submission; do not simply bypass ownership/readiness checks. Preserve the entered query and show the actual reason a search cannot start.
+- Bound concurrent network requests, parsing, OCR and indexing based on available resources. Respect cancellation and provider throttling, and avoid runaway recursive crawling.
+- Reuse existing project database, retrieval, embeddings, native parsers, web safety and document lifecycle. No duplicate RAG or separate research database.
+- Preserve current user settings, model cache, projects, documents and indexes across updates. No GPU placement/memory-policy changes, mandatory paid services, extra model downloads, telemetry or needless dependency growth.
+- Keep the personal AppImage compatible with the owner's Ryzen 7 7735HS / Radeon 680M Vulkan target. Keep build-time backend revision stamping and shipped-file checks.
+- Do not restore training or reintroduce the earlier reverted standalone NotebookLM-like retrieval/evidence-packing implementation. The owner wants integration with the existing project architecture.
+
+## 8. Acceptance tests for the next implementation batch
+
+Add automated regression coverage and report feasible test results before one consolidated build. Include:
+- Source search initialization and safe project-scoped submission; cancellation and project switching.
+- Research synthesis with a small model, malformed tool output, successful recovery and failed/stopped source retention.
+- Practical community/software research (e.g. Minecraft 1.12.2 optimization) without irrelevant academic/official bias.
+- Academic research discovering accessible full-text PDFs; verified native indexing of PDF, DOCX, XLSX and other supported formats including misleading URL extensions/MIME types.
+- Image handling with vision, OCR-only, and neither capability; no fabricated indexing success.
+- Actual Reddit-style challenge-page fixture, blocked or rate-limited fetches, permitted alternatives and explicit failures.
+- Duplicate sources, recursive cycles, bounded resource use, cancellation, project isolation, SSRF and redirect-policy checks.
+- Original files and provenance preserved; indexing status accurately reflects completion or failure; previously stored sources remain intact.
+- Both modes available and distinct; Exhaustive mode does not terminate solely on a premature model finish action.
+- Package and frontend/backend integration checks, then owner runtime testing with actual local models and embeddings.
+
+## 9. Next action
+
+Await owner confirmation of current build testing. Fix any newly reported regressions first. Then implement the expanded two-mode research pipeline in dependency order (discovery and safe acquisition, native ingestion/capability checks, coverage orchestration and UI), with a single consolidated workflow when the batch is ready. Update this file with actual results instead of relying on previous chat context.
