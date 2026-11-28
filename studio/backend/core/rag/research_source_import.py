@@ -62,8 +62,31 @@ def _challenge_page_reason(text):
         )))
     ):
         return "The website returned a bot verification or access-denied page, not the source content."
+    if (
+        len(text) < 2500
+        and any(line.startswith(("a quick browser check", "client challenge")) for line in first)
+        and any(marker in body for marker in (
+            "anubis", "please enable javascript to proceed", "javascript is disabled",
+            "proof-of-work", "browser verification",
+        ))
+    ):
+        return "The website returned a browser verification page, not the requested content."
     if "complete the challenge below" in body and "not for bots" in body:
         return "The website returned a bot verification page, not the source content."
+    return None
+
+
+def _raw_html_challenge_reason(html):
+    """Check structural interstitial signatures before the renderer drops scripts/head."""
+    head = html[:65536].casefold()
+    if (
+        re.search(r'<script\b[^>]*\bid\s*=\s*["\']anubis_challenge["\']', head)
+        and ("/cmd/anubis/" in head or "anubis_version" in head)
+    ) or (
+        re.search(r"<title\b[^>]*>\s*client challenge\s*</title\s*>", head)
+        and re.search(r"/_fs-ch-[a-z0-9_-]+/", head)
+    ):
+        return "The website returned a browser verification page, not the requested content."
     return None
 
 
@@ -304,6 +327,9 @@ def fetch_source_payload(url, title, policy, max_upload_bytes, *,
         raise ValueError("The source returned binary data disguised as text.")
     is_html = "html" in mime or tools._looks_like_html(text)
     if is_html:
+        reason = _raw_html_challenge_reason(text)
+        if reason:
+            raise ValueError(reason)
         # The raw fetcher checks HTTP redirects; the ordinary page fetcher also
         # follows HTML meta refresh through the same SSRF/website-policy gate.
         if tools._meta_refresh_target(data, meta.get("url") or url):

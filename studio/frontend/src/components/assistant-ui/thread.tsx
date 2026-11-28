@@ -3156,20 +3156,22 @@ const Composer: FC<{
   const hasResearchMessage = useAuiState(({ thread }) =>
     threadHasResearchMessage(thread.messages, liveResearchRunId),
   );
-  const researchUsed = researchThreadClaimed || hasResearchMessage;
+  const projectScope = useChatProjectScope();
+  // Project analysis is repeatable; ordinary chat retains its original one-run policy.
+  const researchUsed = projectScope ? isResearchActive : researchThreadClaimed || hasResearchMessage;
   const effectiveDeepResearchEnabled = deepResearchEnabled && !researchUsed;
   const [researchWebsiteAccessOpen, setResearchWebsiteAccessOpen] =
     useState(false);
   const [skillsDialogOpen, setSkillsDialogOpen] = useState(false);
   useEffect(() => {
     if (!researchUsed) return;
-    if (hasResearchMessage && researchThreadId) {
+    if (!projectScope && hasResearchMessage && researchThreadId) {
       useResearchRunStore.getState().setThreadClaimed(researchThreadId, true);
     }
     if (deepResearchEnabled) {
       useChatRuntimeStore.getState().setDeepResearchEnabled(false);
     }
-  }, [deepResearchEnabled, hasResearchMessage, researchThreadId, researchUsed]);
+  }, [deepResearchEnabled, hasResearchMessage, researchThreadId, researchUsed, projectScope]);
   // More than 4 pills: collapse to icons only. Search, Tools, and permissions
   // always show; Images, RAG, MCP and Deep Research are conditional.
   // Narrow viewports collapse too: the labelled row is wider than a phone composer.
@@ -4198,8 +4200,6 @@ const Composer: FC<{
     focusDraft: focusAudioUploadDraft,
   });
   const cancelAudioUpload = audioUpload.cancel;
-  // Read at Send time so a send materializing after a project switch is filed where made.
-  const projectScope = useChatProjectScope();
   // One array per set of ids, not per render: the queue callbacks and the context they feed are
   // keyed on these, and the composer renders on every keystroke.
   const promptQueueThreadIds = useMemo(
@@ -4702,6 +4702,9 @@ const Composer: FC<{
     const projectIdAtQueueStart = incognitoAtQueueStart
       ? null
       : (chatStateAtQueueStart.activeProjectId ?? null);
+    const previousResearchRuns = projectIdAtQueueStart
+      ? { ...useResearchRunStore.getState().latestRunByThreadId }
+      : null;
     const usesThreadDocumentsAtQueueStart =
       chatStateAtQueueStart.ragEnabled &&
       chatStateAtQueueStart.ragSource.type === "thread";
@@ -4970,8 +4973,14 @@ const Composer: FC<{
         parseExternalModelId(runSettingsAtQueueStart.params.checkpoint) === null,
       usesDeepResearch: runSettingsAtQueueStart.deepResearchEnabled,
       researchStarted: () => {
-        const claimed = useResearchRunStore.getState().claimedThreadIds;
-        return getQueueThreadIds().some((id) => Boolean(claimed[id]));
+        const state = useResearchRunStore.getState();
+        if (previousResearchRuns) {
+          return getQueueThreadIds().some((id) => Boolean(
+            state.latestRunByThreadId[id] &&
+            state.latestRunByThreadId[id] !== previousResearchRuns[id],
+          ));
+        }
+        return getQueueThreadIds().some((id) => Boolean(state.claimedThreadIds[id]));
       },
       temporary: incognitoAtQueueStart,
       consumeDeepResearch: () => {
@@ -6199,10 +6208,11 @@ const Composer: FC<{
         inputRef={inputRef}
         side={effectiveMenuSide}
         researchAvailable={!researchUsed}
+        projectResearch={Boolean(projectScope)}
         audioUploadBusy={audioUpload.busy}
       />
     ),
-    [effectiveMenuSide, researchUsed, audioUpload.busy],
+    [effectiveMenuSide, researchUsed, projectScope, audioUpload.busy],
   );
   const pills = useMemo(
     () => (
@@ -7046,8 +7056,9 @@ const ComposerToolsMenu: FC<{
   inputRef: RefObject<HTMLTextAreaElement | null>;
   side?: "top" | "bottom";
   researchAvailable: boolean;
+  projectResearch: boolean;
   audioUploadBusy: boolean;
-}> = ({ inputRef, side = "bottom", researchAvailable, audioUploadBusy }) => {
+}> = ({ inputRef, side = "bottom", researchAvailable, projectResearch, audioUploadBusy }) => {
   const t = useT();
   const navigate = useNavigate();
   const toolsEnabled = useChatRuntimeStore((s) => s.toolsEnabled);
@@ -7264,7 +7275,9 @@ const ComposerToolsMenu: FC<{
               setDeepResearchEnabled(!same);
             }}>
             <HugeiconsIcon icon={Telescope02Icon} strokeWidth={2} />
-            {depth === "deep" ? "Deep Research" : "Exhaustive Research"}
+            {projectResearch
+              ? (depth === "deep" ? "Deep source analysis" : "Exhaustive source analysis")
+              : (depth === "deep" ? "Deep Research" : "Exhaustive Research")}
             {deepResearchEnabled && !researchDisabled &&
               researchDepth === depth ?
                 <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="ml-auto" /> : null}

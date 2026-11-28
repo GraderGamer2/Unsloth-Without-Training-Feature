@@ -3,6 +3,27 @@
 import sqlite3
 
 
+def project_chat_research_conflict(conn, thread_id, owner_subject, user_message_id, active_statuses):
+    """Called inside BEGIN IMMEDIATE when a project chat already owns a claim."""
+    claim = conn.execute(
+        "SELECT owner_subject FROM research_thread_claims WHERE thread_id=?", (thread_id,)
+    ).fetchone()
+    if claim is None or claim[0] != owner_subject:
+        return "This thread research claim belongs to another owner"
+    if conn.execute(
+        "SELECT 1 FROM research_runs WHERE thread_id=? AND user_message_id=?",
+        (thread_id, user_message_id),
+    ).fetchone():
+        return "This message already has a research run"
+    placeholders = ",".join("?" for _ in active_statuses)
+    if conn.execute(
+        f"SELECT 1 FROM research_runs WHERE thread_id=? AND status IN ({placeholders})",
+        (thread_id, *sorted(active_statuses)),
+    ).fetchone():
+        return "This thread already has an active research run"
+    return None
+
+
 def ensure_project_scope(conn: sqlite3.Connection) -> None:
     if any(row[1] == "project_id" for row in conn.execute("PRAGMA table_info(research_runs)")):
         return

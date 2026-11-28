@@ -4752,11 +4752,20 @@ export function createOpenAIStreamAdapter(
       if (queuedRunSettings) {
         runtime = { ...runtime, ...queuedRunSettings };
       }
+      // Resolve an explicitly selected research mode against the saved project,
+      // rather than using whichever project is on screen after navigation.
+      const researchDepthAtSend = runtime.researchDepth;
+      const projectIdForResearch = runtime.deepResearchEnabled
+        ? await resolveProjectId(resolvedThreadId, readThreadRecord, {
+            rethrowReadFailure: true,
+            composerProjectId: composerProjectIdAtSend,
+          })
+        : null;
       const threadAlreadyResearched = Boolean(
         resolvedThreadId &&
           useResearchRunStore.getState().claimedThreadIds[resolvedThreadId],
       );
-      if (runtime.deepResearchEnabled && threadAlreadyResearched) {
+      if (runtime.deepResearchEnabled && threadAlreadyResearched && !projectIdForResearch) {
         if (queuedRunSettings) {
           runtime = { ...runtime, deepResearchEnabled: false };
         } else {
@@ -5011,7 +5020,7 @@ export function createOpenAIStreamAdapter(
             threadId: resolvedThreadId,
             userMessageId: userMessage.id,
             assistantMessageId: unstable_assistantMessageId,
-            depth: runtime.researchDepth,
+            depth: researchDepthAtSend,
             inferenceRequest,
             // omit empty fields: old backends reject unknown fields with 422.
             ...(researchQuestion ? { question: researchQuestion } : {}),
@@ -5289,6 +5298,7 @@ export function createOpenAIStreamAdapter(
       const codeToolsEnabled = codeToolsOn(runtime);
       if (
         deepResearchArmed &&
+        !projectIdForResearch &&
         !supportsTools &&
         !isExternalModelId(params.checkpoint)
       ) {
@@ -5447,18 +5457,23 @@ export function createOpenAIStreamAdapter(
       const sourceResearchQuestion = projectSourceResearchQuestion(
         rawMessages, ragProjectId, Boolean(options.pairId),
       );
-      if (sourceResearchQuestion !== null) {
-        if (browserTemporary) throw new Error("Source research requires a saved project chat.");
-        if (threadAlreadyResearched) throw new Error("Start source research in a new project chat.");
-        if (!supportsTools && !isExternalRequest) {
-          throw new Error("Source research requires a model that supports tools.");
-        }
+      if (projectIdForResearch && deepResearchArmed && sourceResearchQuestion === null && !continuation) {
+        // A user-selected project research mode is an explicit request, not
+        // a tool suggestion. Use the saved question and project-scoped runner.
+        if (browserTemporary) throw new Error("Project research requires a saved chat.");
+        if (ragProjectId !== projectIdForResearch) throw new Error("The project changed while preparing research. Please retry.");
+        if (!projectRagEnabled) throw new Error("Add indexed sources to the project before researching them.");
         try {
-          yield* startDeepResearch(sourceResearchQuestion, abortSignal);
+          yield* startDeepResearch("", abortSignal);
         } finally {
           releaseCurrentPreStreamRun();
         }
         return;
+      }
+      if (sourceResearchQuestion !== null) {
+        // The old hidden command predates project-owned discovery. Do not turn
+        // it into a report or spend a normal chat turn on source acquisition.
+        throw new Error("Use the project's Find Sources panel to discover and retain new sources.");
       }
       const replayReasoning = !isExternalRequest || (
         providerSupportsPreserveThinking(externalProvider?.providerType) &&

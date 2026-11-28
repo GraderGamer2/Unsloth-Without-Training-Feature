@@ -544,8 +544,23 @@ def create_research_run(
             detail = "Deep research requires a user message with non-empty text",
         )
     config = _sanitize_config(payload, thread, request)
+    if thread.get("projectId"):
+        # Derive the scope from the authenticated stored chat, not client-provided
+        # knowledge-base IDs. Source discovery remains a separate project run.
+        project_id = thread["projectId"]
+        requested_project = (config.get("ragScope") or {}).get("project_id")
+        if requested_project and requested_project != project_id:
+            raise HTTPException(status_code=409, detail="The project changed while preparing research")
+        if get_chat_project(project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        config["projectGrounded"] = True
+        config["ragScope"] = {
+            "project_id": project_id,
+            "mode": "hybrid",
+        }
+        config.pop("mcpSources", None)
     try:
-        if db.has_thread_claim(payload.threadId):
+        if db.has_thread_claim(payload.threadId) and not config.get("projectGrounded"):
             # A stopped run is re-pointed at this question instead of refusing every later message in the chat.
             run = db.rebind_cancelled(
                 thread_id = payload.threadId,

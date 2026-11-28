@@ -20,9 +20,21 @@ from core.rag.research_source_import import (
 )
 
 _STOP = set("about after also and are best can could does find for from have how into more only research search should that the their them these this those use using what when where which will with would".split())
-_ACADEMIC = re.compile(r"\b(?:academic|scholarly|peer.reviewed|literature review|journal articles?|research papers?|doi|systematic review|scientific studies|thesis|dissertation|meta.analysis|jurnal|artikel ilmiah|skripsi|penelitian)\b", re.I)
+_ACADEMIC = re.compile(r"\b(?:academic|scholarly|peer.reviewed|literature review|journal articles?|research papers?|doi|systematic review|scientific studies|thesis|dissertation|meta.analysis|psychology|psychological|interpersonal|social dynamics|social behaviour|social behavior|human behaviour|human behavior|peer influence|jurnal|artikel ilmiah|skripsi|penelitian|psikologi)\b", re.I)
 _TECH = re.compile(r"\b(?:software|code|coding|github|linux|windows|minecraft|performance|driver|vulkan|game|mod|library|framework|benchmark|optimization|api|compile|compiler|build)\b", re.I)
-_DOCUMENT = re.compile(r"\.(?:pdf|docx?|xlsx?|pptx?|od[stp]|epub|rtf|csv|tsv|json|xml|png|jpe?g|webp)(?:$|[?#])", re.I)
+_DOCUMENT = re.compile(r"\.(?:pdf|docx?|xlsx?|pptx?|od[stp]|epub|rtf|csv|tsv|json|xml)(?:$|[?#])", re.I)
+_IMAGE_URL = re.compile(r"\.(?:png|jpe?g|webp|gif|tiff?|bmp|svg|avif)(?:$|[?#])", re.I)
+_VISUAL_REQUEST = re.compile(r"\b(?:images?|photos?|photographs?|pictures?|illustrations?|screenshots?|diagrams?|charts?|graphs?|infographics?|visual evidence|gambar|foto|grafik|diagram)\b", re.I)
+_EVIDENCE_IMAGE = re.compile(r"\b(?:data chart|chart|graph|diagram|schematic|infographic|microscopy|scatter plot|histogram|heatmap|flowchart|grafik)\b", re.I)
+
+
+def relevant_image(question, label, url):
+    """Do not turn incidental article illustrations into independent research sources."""
+    return (
+        url in question
+        or bool(_VISUAL_REQUEST.search(question))
+        or bool(_EVIDENCE_IMAGE.search(label) and words(question) & words(label))
+    )
 _CROSSREF_LOCK = threading.Lock()
 _crossref_next = 0.0
 
@@ -143,11 +155,11 @@ class _Links(HTMLParser):
             return
         values = dict(attrs)
         if tag == "a" and values.get("href"):
-            self.current = [values["href"], values.get("title") or ""]
+            self.current = [values["href"], values.get("title") or "", False]
         elif tag == "meta" and (values.get("name") or values.get("property") or "").casefold() in {"citation_pdf_url", "og:pdf"} and values.get("content"):
-            self.links.append((values["content"], "full text PDF"))
+            self.links.append((values["content"], "full text PDF", False))
         elif tag == "img" and values.get("src") and values.get("alt"):
-            self.links.append((values["src"], values["alt"]))
+            self.links.append((values["src"], values["alt"], True))
 
     def handle_data(self, data):
         if self.current is not None and len(self.current[1]) < 500:
@@ -170,7 +182,7 @@ def relevant_links(html, base, question, policy, limit=16):
     keywords = words(question)
     results = []
     seen = set()
-    for href, label in parser.links:
+    for href, label, is_image in parser.links:
         try:
             url = urljoin(base, href.strip())
             parsed = urlsplit(url)
@@ -182,15 +194,88 @@ def relevant_links(html, base, question, policy, limit=16):
         except ValueError:
             continue
         label = " ".join(label.split())[:200]
+        if (is_image or _IMAGE_URL.search(url)) and not relevant_image(question, label, url):
+            continue
         score = len(keywords & words(label + " " + parsed.path))
         if _DOCUMENT.search(url) and (score or "full text" in label.casefold() or "download" in label.casefold() or parsed.path.lower().endswith(".pdf")):
             score += 2
         if score <= 0:
             continue
+        # A single generic word is weak evidence of relevance for recursive links.
+        # Explicit PDF/download links are already boosted above.
+        if len(keywords) >= 4 and score < 2 and not (is_image or _IMAGE_URL.search(url)):
+            continue
         seen.add(key)
         results.append((score, url, label or url))
     results.sort(key=lambda item: -item[0])
     return [{"url": url, "title": label, "snippet": "Related link found in a fetched source."} for _, url, label in results[:limit]]
+
+
+def select_project_evidence(candidates, previous, limit):
+    """Prefer source diversity without discarding the highest-ranked unique evidence."""
+    if limit <= 0:
+        return []
+    used = {item.get("chunkId") for item in previous if item.get("chunkId")}
+    seen_text = {" ".join(str(item.get("snippet") or item.get("text") or "").split()).casefold()[:1500]
+                 for item in previous}
+    counts = {}
+    for item in previous:
+        doc = item.get("documentId") or item.get("filename")
+        counts[doc] = counts.get(doc, 0) + 1
+    pool = []
+    for item in candidates:
+        key = item.get("chunkId")
+        body = " ".join(str(item.get("text") or "").split()).casefold()[:1500]
+        if not key or not body or key in used or body in seen_text:
+            continue
+        used.add(key)
+        seen_text.add(body)
+        pool.append(item)
+    out = []
+    while pool and len(out) < limit:
+        # Keep the strongest initial hit; subsequently favour documents not
+        # represented yet, preserving original relevance order on ties.
+        index = 0 if not out and not previous else min(
+            range(len(pool)),
+            key=lambda i: (i + 4 * counts.get(pool[i].get("documentId") or pool[i].get("filename"), 0), i),
+        )
+        item = pool.pop(index)
+        doc = item.get("documentId") or item.get("filename")
+        counts[doc] = counts.get(doc, 0) + 1
+        out.append(item)
+    return out
+
+
+def legacy_interstitial_documents(project_id):
+    """Exclude known challenge pages from analysis without modifying retained originals."""
+    from pathlib import Path
+    from core.rag import account_db, store
+    from core.rag.research_source_import import _raw_html_challenge_reason
+    from utils.paths import rag_uploads_root
+
+    root = Path(rag_uploads_root()).resolve()
+    invalid = set()
+    conn = account_db.get_connection()
+    try:
+        for doc in store.list_documents(conn, store.project_scope(project_id)):
+            if not doc.get("source_metadata") or not str(doc.get("filename") or "").lower().endswith((".html", ".htm")):
+                continue
+            record = store.get_document(conn, doc["id"]) or {}
+            if not record.get("stored_path"):
+                continue
+            try:
+                path = Path(record["stored_path"]).resolve()
+                if not path.is_relative_to(root) or not path.is_file():
+                    continue
+                with path.open("rb") as stream:
+                    head = stream.read(65536).decode("utf-8", errors="replace")
+                if _raw_html_challenge_reason(head):
+                    invalid.add(doc["id"])
+            except (OSError, ValueError, RuntimeError):
+                continue
+    finally:
+        conn.close()
+    return invalid
 
 
 def retained_documents(project_id):
@@ -275,6 +360,8 @@ class DiscoveryFrontier:
             except (KeyError, ValueError):
                 continue
             if key in self.seen or key in self.pending_keys:
+                continue
+            if _IMAGE_URL.search(item["url"]) and not relevant_image(self.question, item.get("title", ""), item["url"]):
                 continue
             if self.retained(item["url"]):
                 self.seen.add(key)
@@ -387,8 +474,14 @@ class DiscoveryFrontier:
                 priority.add(canonical_source_url(item["url"]))
             except (KeyError, ValueError):
                 continue
-        if priority:
-            self.pending = deque(sorted(self.pending, key=lambda item: canonical_source_url(item["url"]) not in priority))
+        # Rank by the original topic, then diversify domains before consuming
+        # new search results. Freshness alone must not displace a better pending result.
+        self.pending = deque(sorted(self.pending, key=lambda item: (
+            -len(self.question_words & words(item.get("title", "") + " " + (item.get("snippet") or ""))),
+            urlsplit(item["url"]).hostname in self.domains,
+            not bool(_DOCUMENT.search(item["url"])),
+            canonical_source_url(item["url"]) not in priority,
+        )))
         deadline = time.monotonic() + max(5, timeout)
         verified = []
         batch_limit = 10 if self.exhaustive else 6
@@ -428,6 +521,8 @@ class DiscoveryFrontier:
                 return None
             sha = hashlib.sha256(payload).hexdigest()
             fmt = filename.rsplit(".", 1)[-1].upper()
+            if fmt in {"PNG", "JPG", "JPEG", "WEBP", "GIF", "TIF", "TIFF", "BMP", "SVG", "AVIF"} and not relevant_image(self.question, item["title"], item["url"]):
+                return {"filtered": True}
             content_hash = details.get("contentSha256") or sha
             from core.research.temporary_sources import remember
             cached = remember(self.project_id, self.run_id, item["url"], filename, payload, details, policy)
@@ -445,6 +540,8 @@ class DiscoveryFrontier:
             for future in futures:
                 result = future.result()
                 if result is None:
+                    continue
+                if result.get("filtered"):
                     continue
                 if result.get("skip"):
                     self.skipped += 1

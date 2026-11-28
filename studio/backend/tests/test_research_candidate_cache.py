@@ -90,12 +90,43 @@ class DiscoveryCoverageTests(unittest.TestCase):
         self.assertIn("water", frontier.summary()["uncoveredTerms"])
         self.assertTrue(frontier.followups)
 
+    def test_decorative_images_are_not_recursive_evidence(self):
+        html = '<img src="/hug.jpg" alt="forest water people"><img src="/chart.png" alt="forest water chart"><a href="/paper.pdf">forest water research</a>'
+        results = self.discovery["relevant_links"](html, "https://example.org/article", "forest water people research", {})
+        self.assertEqual({item["url"] for item in results}, {"https://example.org/chart.png", "https://example.org/paper.pdf"})
+        images = self.discovery["relevant_links"](html, "https://example.org/article", "forest water images", {})
+        self.assertIn("https://example.org/hug.jpg", {item["url"] for item in images})
+
+    def test_evidence_diversity_and_deduplication(self):
+        def hit(chunk, doc, text):
+            return {"chunkId": chunk, "documentId": doc, "text": text}
+        old = [{"chunkId": "1", "documentId": "a", "snippet": "Repeated passage"}]
+        candidates = [hit("1", "a", "Repeated passage"), hit("2", "a", "Another passage"),
+                      hit("3", "b", "New document"), hit("4", "c", "Repeated passage"),
+                      hit("5", "d", "Independent evidence")]
+        chosen = self.discovery["select_project_evidence"](candidates, old, 3)
+        self.assertEqual([item["chunkId"] for item in chosen], ["3", "5", "2"])
+
     def test_openalex_rejects_disallowed_locations(self):
         providers = runpy.run_path(str(BACKEND / "core/research/academic_providers.py"))
         found = providers["_locations"]({"display_name": "Paper", "doi": "https://blocked.org/paper",
             "best_oa_location": {"is_oa": True, "pdf_url": "https://example.org/paper.pdf",
                                  "landing_page_url": "https://blocked.org/landing"}}, {})
         self.assertEqual([item["url"] for item in found], ["https://example.org/paper.pdf"])
+
+
+class ChallengePageTests(unittest.TestCase):
+    def test_structural_challenge_signatures(self):
+        policy = ModuleType("core.inference.web_access_policy")
+        policy.check_url_access = lambda *args: (True, "", "")
+        policy.normalize_website_policy = lambda value: value
+        with patch.dict(sys.modules, {policy.__name__: policy}):
+            importer = runpy.run_path(str(BACKEND / "core/rag/research_source_import.py"))
+        check = importer["_raw_html_challenge_reason"]
+        self.assertTrue(check('<title>A quick browser check</title><script id="anubis_challenge">{}</script><script src="/cmd/anubis/main.js"></script>'))
+        self.assertTrue(check('<title>Client Challenge</title><script src="/_fs-ch-123abc/script.js"></script>'))
+        self.assertIsNone(check('<title>Client challenge in business</title><p>Research about Anubis and browser verification.</p>'))
+        self.assertIsNone(check('<title>Research on Anubis</title><p>anubis_challenge</p>'))
 
 
 if __name__ == "__main__":

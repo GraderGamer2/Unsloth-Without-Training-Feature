@@ -27,6 +27,7 @@ const QUEUED_SETTING_KEYS = [
   "sandboxLevel",
   "webFetchToolsEnabled",
   "deepResearchEnabled",
+  "researchDepth",
   "researchWebsitePolicy",
   "researchMcpSources",
   "researchModelTimeoutSeconds",

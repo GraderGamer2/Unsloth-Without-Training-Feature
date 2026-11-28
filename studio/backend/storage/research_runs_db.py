@@ -239,9 +239,16 @@ def create_run(
                 "SELECT 1 FROM research_thread_claims WHERE thread_id=?",
                 (thread_id,),
             ).fetchone()
-            if claim is not None:
+            if claim is None:
+                raise
+            if not config.get("projectGrounded"):
                 raise ResearchConflictError("This thread already has a Deep Research run") from exc
-            raise
+            from storage.research_project_scope import project_chat_research_conflict
+            conflict = project_chat_research_conflict(
+                conn, thread_id, owner_subject, user_message_id, ACTIVE_STATUSES,
+            )
+            if conflict:
+                raise ResearchConflictError(conflict) from exc
         _bind_assistant_locked(
             conn,
             run_id = run_id,
@@ -900,6 +907,19 @@ def retry(
             ).fetchone()
         if active is not None:
             raise ResearchConflictError("This thread already has an active research run")
+        # In a project chat, retry the latest failed run, not an older run whose
+        # assistant card and thread activity have since been superseded.
+        if row["thread_id"] is not None:
+            project = conn.execute(
+                "SELECT project_id FROM chat_threads WHERE id=?", (row["thread_id"],)
+            ).fetchone()
+            if project and project[0]:
+                latest = conn.execute(
+                    "SELECT id FROM research_runs WHERE thread_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                    (row["thread_id"],),
+                ).fetchone()
+                if latest and latest[0] != run_id:
+                    raise ResearchConflictError("Start new research in this project chat instead of retrying an older run")
         plan_was_approved = False
         if row["plan_json"]:
             plan_was_approved = (

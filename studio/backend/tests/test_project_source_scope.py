@@ -46,3 +46,22 @@ assert conn.execute("SELECT * FROM sources").fetchall() == [("s","old")]
 assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
 print("PASS: migration preserves legacy records, ownership, indexes and foreign keys")
+
+# Separate transaction-level fixture for reusing a claim without erasing old reports.
+claims = sqlite3.connect(":memory:")
+claims.executescript("""
+CREATE TABLE research_thread_claims(thread_id TEXT PRIMARY KEY, owner_subject TEXT NOT NULL);
+CREATE TABLE research_runs(thread_id TEXT, user_message_id TEXT, status TEXT);
+INSERT INTO research_thread_claims VALUES('t','owner');
+INSERT INTO research_runs VALUES('t','old','completed');
+""")
+active = {"planning", "queued", "running", "awaiting_approval", "paused", "cancelling"}
+assert module.project_chat_research_conflict(claims, 't', 'owner', 'new', active) is None
+assert module.project_chat_research_conflict(claims, 't', 'owner', 'old', active)
+assert module.project_chat_research_conflict(claims, 't', 'other', 'new', active)
+claims.execute("INSERT INTO research_runs VALUES('t','other','running')")
+assert module.project_chat_research_conflict(claims, 't', 'owner', 'new', active)
+claims.execute("UPDATE research_runs SET status='cancelled' WHERE user_message_id='other'")
+assert module.project_chat_research_conflict(claims, 't', 'owner', 'new', active) is None
+assert claims.execute("SELECT COUNT(*) FROM research_runs").fetchone()[0] == 2
+print("PASS: repeated project analysis, owner isolation and active/duplicate-run exclusion")
