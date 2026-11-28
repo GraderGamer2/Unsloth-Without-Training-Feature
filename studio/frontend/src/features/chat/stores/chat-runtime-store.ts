@@ -2634,6 +2634,7 @@ type ChatRuntimeStore = {
   codeToolsDeclinedUnderFullAccess: boolean;
   imageToolsEnabled: boolean;
   deepResearchEnabled: boolean;
+  researchDepth: "deep" | "exhaustive";
   researchWebsitePolicy: ResearchWebsitePolicy;
   researchModelTimeoutSeconds: number;
   researchMcpSources: ResearchMcpSource[];
@@ -2919,6 +2920,7 @@ type ChatRuntimeStore = {
   setCodeToolsEnabled: (enabled: boolean) => void;
   setImageToolsEnabled: (enabled: boolean) => void;
   setDeepResearchEnabled: (enabled: boolean) => void;
+  setResearchDepth: (depth: "deep" | "exhaustive") => void;
   setResearchWebsitePolicy: (policy: ResearchWebsitePolicy) => void;
   setResearchModelTimeoutSeconds: (seconds: number) => void;
   setResearchMcpSources: (sources: ResearchMcpSource[]) => void;
@@ -4562,6 +4564,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
   codeToolsDeclinedUnderFullAccess: false,
   imageToolsEnabled: loadBool(CHAT_IMAGE_TOOLS_ENABLED_KEY, false),
   deepResearchEnabled: loadBool(CHAT_DEEP_RESEARCH_ENABLED_KEY, false),
+  researchDepth: "deep",
   researchWebsitePolicy: loadResearchWebsitePolicy(),
   researchModelTimeoutSeconds: loadResearchModelTimeoutSeconds(),
   researchMcpSources: loadResearchMcpSources(),
@@ -5843,6 +5846,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
         queuedSettingsEpoch: state.queuedSettingsEpoch + 1,
       };
     }),
+  setResearchDepth: (researchDepth) => set((state) => ({ researchDepth, queuedSettingsEpoch: state.queuedSettingsEpoch + 1 })),
   setDeepResearchEnabled: (deepResearchEnabled) =>
     set((state) => {
       if (

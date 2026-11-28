@@ -19,6 +19,7 @@ import {
   noteProjectWork,
   projectWorkCount,
   reconcileProjectFolderJobs,
+  retryProjectResearchDocument,
   streamJobEvents,
   subscribeProjectSourcesBroadcast,
   uploadKnowledgeBaseDocument,
@@ -291,7 +292,7 @@ export function useRagDocuments(
         // Merge server truth with local progress so a refresh mid-index keeps a
         // live "running %" chip. Failed docs hidden, except ones this session can retry.
         const rows = (await lister()).filter(
-          (row) => row.status !== "failed" || retryItems.current.has(row.id),
+          (row) => row.status !== "failed" || row.researchSource || retryItems.current.has(row.id),
         );
         if (refreshSeq.current !== requestId) return true;
         setDocuments((prev) => {
@@ -704,18 +705,29 @@ export function useRagDocuments(
   );
 
   const canRetry = useCallback(
-    (documentId: string) => retryItems.current.has(documentId),
+    (documentId: string) => retryItems.current.has(documentId) ||
+      documentsRef.current.some(doc => doc.id === documentId && doc.researchSource && doc.status === "failed"),
     [],
   );
 
   const retry = useCallback(
     async (documentId: string) => {
       const item = retryItems.current.get(documentId);
-      if (!item) return;
+      if (!item) {
+        const doc = documentsRef.current.find(row => row.id === documentId);
+        if (scope?.type !== "project" || !doc?.researchSource || doc.status !== "failed") return;
+        try {
+          await retryProjectResearchDocument(scope.projectId, documentId);
+          await refresh();
+        } catch (error) {
+          toast.error("Could not retry research source", {description: String(error)});
+        }
+        return;
+      }
       if (!(await remove(documentId))) return;
       await upload([item]);
     },
-    [remove, upload],
+    [remove, upload, scope, refresh],
   );
 
   return {

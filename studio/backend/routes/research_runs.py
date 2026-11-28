@@ -12,7 +12,7 @@ import re
 import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -28,7 +28,7 @@ from state import run_subscribers, unattended_runs
 from state.tool_policy import get_tool_policy
 from hub.services.models import account_access
 from storage import mcp_servers_db, providers_db
-from storage.studio_db import get_chat_message, get_chat_thread, upsert_chat_message
+from storage.studio_db import get_chat_message, get_chat_thread, get_chat_project, upsert_chat_message
 from utils.current_date_prompt_settings import current_date_prompt_line
 
 router = APIRouter()
@@ -88,6 +88,7 @@ class CreateResearchRun(BaseModel):
     websitePolicy: dict[str, list[str]] | None = None
     instructions: str | None = Field(default = None, max_length = 32_000)
     question: str | None = Field(default = None, max_length = 2000)
+    depth: Literal["deep", "exhaustive"] = "deep"
     # The owner's "stop when I close the tab": cancel the run once no tab has followed it for a
     # while (state/unattended_runs.py). Stored in the config, so a retry and a restart keep it.
     stopWhenUnattended: bool = False
@@ -100,6 +101,22 @@ class CreateResearchRun(BaseModel):
             for key, item in value.items():
                 if isinstance(item, bool):
                     raise ValueError(f"{key} must be an integer, not a boolean")
+        return value
+
+
+class CreateProjectResearchRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=1600)
+    inferenceRequest: dict[str, Any]
+    depth: Literal["deep", "exhaustive"] = "deep"
+    budgets: dict[str, int] | None = None
+    websitePolicy: dict[str, list[str]] | None = None
+
+    @field_validator("budgets", mode="before")
+    @classmethod
+    def _reject_boolean_budgets(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(isinstance(item, bool) for item in value.values()):
+            raise ValueError("Research budgets must be integers, not booleans")
         return value
 
 
@@ -140,9 +157,11 @@ class RetryResearchRun(BaseModel):
         return value
 
 
-def _require_run(run_id: str) -> dict:
+def _require_run(run_id: str, subject: str | None = None) -> dict:
     run = db.get_run(run_id)
-    if run is None:
+    if run is None or (run.get("projectId") and (
+        subject != run["ownerSubject"] or get_chat_project(run["projectId"]) is None
+    )):
         raise HTTPException(status_code = 404, detail = "Research run not found")
     return run
 
@@ -155,6 +174,8 @@ def _require_tools_enabled() -> None:
 
 
 def _sync_assistant(run: dict, text: str | None = None) -> None:
+    if run.get("projectId"):
+        return
     message_id = db.discover_and_bind_assistant_message(run["id"])
     if not message_id:
         if run["status"] not in db.TERMINAL_STATUSES:
@@ -444,8 +465,8 @@ def _sanitize_config(
         if server and server.get("is_enabled") and source.model_dump() not in mcp_sources:
             mcp_sources.append(source.model_dump())
     budgets = {
-        "maxSteps": 12,
-        "maxSources": 40,
+        "maxSteps": 30 if payload.depth == "exhaustive" else 12,
+        "maxSources": 100 if payload.depth == "exhaustive" else 40,
         "modelTimeoutSeconds": 0,
         "toolTimeoutSeconds": 120,
         "firstOutputTimeoutSeconds": 120,
@@ -487,6 +508,7 @@ def _sanitize_config(
         raise HTTPException(status_code = 400, detail = str(exc)) from exc
     return {
         "model": model,
+        "depth": payload.depth,
         "inferenceRequest": request,
         "ragScope": rag_scope,
         **({"mcpSources": mcp_sources} if mcp_sources and get_tool_policy() is not False else {}),
@@ -561,6 +583,59 @@ def create_research_run(
     return run
 
 
+@router.post("/project/{project_id}", status_code=202)
+def create_project_research_run(
+    project_id: str, payload: CreateProjectResearchRun, request: Request,
+    current_subject: str = Depends(get_current_subject),
+):
+    _require_tools_enabled()
+    if get_chat_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not payload.question.strip():
+        raise HTTPException(status_code=422, detail="Enter a research topic")
+    # Reuse all of the normal saved-provider, inference and website-policy validation;
+    # no thread or user message is created.
+    validated = CreateResearchRun(
+        threadId="", userMessageId="", inferenceRequest=payload.inferenceRequest,
+        depth=payload.depth, question=payload.question, budgets=payload.budgets,
+        websitePolicy=payload.websitePolicy,
+    )
+    config = _sanitize_config(validated, {}, request)
+    try:
+        run = db.create_project_run(run_id=uuid.uuid4().hex, owner_subject=current_subject,
+                                    project_id=project_id, config=config)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except db.ResearchConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    supervisor = getattr(request.app.state, "research_supervisor", None)
+    if supervisor is not None:
+        supervisor.note_request_address(request)
+        supervisor.wake()
+    return run
+
+
+@router.get("/project/{project_id}/latest")
+def latest_project_research_run(project_id: str, current_subject: str = Depends(get_current_subject)):
+    if get_chat_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return db.latest_project_run(project_id, current_subject)
+
+
+@router.delete("/project/{project_id}/{run_id}")
+def discard_project_research_run(
+    project_id: str, run_id: str, current_subject: str = Depends(get_current_subject),
+):
+    run = _require_run(run_id, current_subject)
+    if run.get("projectId") != project_id:
+        raise HTTPException(status_code=404, detail="Source search not found in this project")
+    try:
+        db.discard_project_run(run_id, current_subject)
+    except db.ResearchConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"discarded": True}
+
+
 @router.get("/active")
 def active_research_runs(
     thread_id: str = Query(alias = "threadId"), current_subject: str = Depends(get_current_subject)
@@ -573,7 +648,7 @@ def active_research_runs(
 
 @router.get("/{run_id}")
 def get_research_run(run_id: str, current_subject: str = Depends(get_current_subject)):
-    return _require_run(run_id)
+    return _require_run(run_id, current_subject)
 
 
 @router.put("/{run_id}/plan")
@@ -582,12 +657,12 @@ def update_research_plan(
     payload: UpdatePlan,
     current_subject: str = Depends(get_current_subject),
 ):
-    _require_run(run_id)
+    _require_run(run_id, current_subject)
     try:
         db.set_plan(run_id, payload.plan.model_dump(), payload.expectedRevision)
     except (db.ResearchConflictError, KeyError) as exc:
         raise HTTPException(status_code = 409, detail = str(exc)) from exc
-    run = _require_run(run_id)
+    run = _require_run(run_id, current_subject)
     _sync_assistant(run)
     return run
 
@@ -600,7 +675,7 @@ def approve_research_plan(
     current_subject: str = Depends(get_current_subject),
 ):
     _require_tools_enabled()
-    _require_run(run_id)
+    _require_run(run_id, current_subject)
     try:
         db.approve(run_id, payload.planRevision, payload.planHash)
     except (db.ResearchConflictError, KeyError) as exc:
@@ -609,7 +684,7 @@ def approve_research_plan(
     if supervisor is not None:
         supervisor.note_request_address(request)
         supervisor.wake()
-    run = _require_run(run_id)
+    run = _require_run(run_id, current_subject)
     _sync_assistant(run)
     return run
 
@@ -620,12 +695,12 @@ def cancel_research_run(
     request: Request,
     current_subject: str = Depends(get_current_subject),
 ):
-    _require_run(run_id)
+    _require_run(run_id, current_subject)
     status = db.request_cancel(run_id)
     supervisor = getattr(request.app.state, "research_supervisor", None)
     if supervisor is not None and status == "cancelling":
         supervisor.cancel(run_id)
-    run = _require_run(run_id)
+    run = _require_run(run_id, current_subject)
     _sync_assistant(run)
     return run
 
@@ -638,7 +713,7 @@ def retry_research_run(
     payload: RetryResearchRun | None = None,
 ):
     _require_tools_enabled()
-    _require_run(run_id)
+    _require_run(run_id, current_subject)
     model_timeout = None
     website_policy = None
     if payload is not None:
@@ -667,7 +742,7 @@ def retry_research_run(
     if supervisor is not None:
         supervisor.note_request_address(request)
         supervisor.wake()
-    run = _require_run(run_id)
+    run = _require_run(run_id, current_subject)
     _sync_assistant(run)
     # A new attempt under the same id, with a grace of its own.
     _watch_if_unattended_stop(request.app, run, replace = True)
@@ -685,7 +760,7 @@ async def research_events(
     last_event_id: str | None = Header(None, alias = "Last-Event-ID"),
     current_subject: str = Depends(get_current_subject),
 ):
-    opening = _require_run(run_id)
+    opening = _require_run(run_id, current_subject)
     header_after = int(last_event_id) if last_event_id and last_event_id.isdigit() else 0
     cursor = max(after or 0, header_after)
     # Re-armed by its follower too: idempotent, and a watch can only have been lost with the process.

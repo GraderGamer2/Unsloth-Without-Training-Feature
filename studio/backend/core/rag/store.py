@@ -243,14 +243,15 @@ def create_document(
     created_at: str | None = None,
     rowid: int | None = None,
     commit: bool = True,
+    source_metadata: str | None = None,
 ) -> str:
     """On a rewrite, carry created_at and rowid over so archived turns keep their place."""
     document_id = document_id or str(uuid.uuid4())
     conn.execute(
         "INSERT INTO documents(rowid, id, scope, kb_id, thread_id, project_id, filename, sha256, "
         "status, stored_path, created_at, embedding_model, linked_folder_id, "
-        "linked_relative_path, archive_messages, archive_ordinal) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "linked_relative_path, archive_messages, archive_ordinal, source_metadata) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             rowid,
             document_id,
@@ -268,6 +269,7 @@ def create_document(
             linked_relative_path,
             archive_messages,
             archive_ordinal,
+            source_metadata,
         ),
     )
     if commit:
@@ -304,7 +306,7 @@ def set_document_embedding_model(
 def list_documents(conn: sqlite3.Connection, scope: str) -> list[dict]:
     rows = conn.execute(
         "SELECT id, scope, kb_id, thread_id, project_id, filename, sha256, status, error, "
-        "num_chunks, created_at, linked_folder_id "
+        "num_chunks, created_at, linked_folder_id, source_metadata "
         "FROM documents d WHERE scope=? AND NOT EXISTS "
         "(SELECT 1 FROM linked_folder_retired_scopes r WHERE r.scope=d.scope) "
         "ORDER BY created_at DESC",

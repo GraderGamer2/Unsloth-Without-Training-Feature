@@ -1020,6 +1020,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     }
     if "report_text" not in research_run_cols:
         conn.execute("ALTER TABLE research_runs ADD COLUMN report_text TEXT")
+    from storage.research_project_scope import ensure_project_scope
+
+    ensure_project_scope(conn)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_active_project ON research_runs(project_id) "
+        "WHERE project_id IS NOT NULL AND status IN "
+        "('planning','awaiting_approval','queued','running','paused','cancelling')"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS research_thread_claims (
@@ -1070,7 +1078,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """INSERT OR IGNORE INTO research_thread_claims
            (owner_subject, thread_id, created_at)
            SELECT owner_subject, thread_id, created_at
-           FROM research_runs ORDER BY created_at, id"""
+           FROM research_runs WHERE thread_id IS NOT NULL ORDER BY created_at, id"""
     )
     conn.execute(
         """UPDATE research_runs
@@ -1112,6 +1120,9 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    source_cols = {row[1] for row in conn.execute("PRAGMA table_info(research_sources)")}
+    if "metadata_json" not in source_cols:
+        conn.execute("ALTER TABLE research_sources ADD COLUMN metadata_json TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS research_document_sources (
@@ -3732,6 +3743,11 @@ def delete_chat_project(id: str, delete_files: bool = False) -> Optional[dict]:
             if thread_ids
             else []
         )
+        active_runs.extend(row["id"] for row in conn.execute(
+            "SELECT id FROM research_runs WHERE project_id=? AND lease_owner IS NOT NULL "
+            "AND status IN ({})".format(",".join("?" for _ in _ACTIVE_RESEARCH_RUN_STATUSES)),
+            (id, *_ACTIVE_RESEARCH_RUN_STATUSES),
+        ))
         active_chat_runs = _active_chat_generation_run_ids(conn, thread_ids)
         _reparent_surviving_forks(conn, thread_ids)
         # Tombstone this membership so a late writer cannot recreate a member.

@@ -279,6 +279,62 @@ def create_run(
     return get_run(run_id, owner_subject)
 
 
+def create_project_run(*, run_id: str, owner_subject: str, project_id: str, config: dict) -> dict:
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM chat_projects WHERE id=?", (project_id,)).fetchone() is None:
+            raise KeyError(project_id)
+        now = now_ms()
+        try:
+            conn.execute(
+                "INSERT INTO research_runs(id,owner_subject,project_id,status,config_json,created_at,updated_at) "
+                "VALUES(?,?,?,'planning',?,?,?)",
+                (run_id, owner_subject, project_id, json.dumps(config, ensure_ascii=False), now, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ResearchConflictError("This project already has an active source search") from exc
+        _event_locked(conn, run_id, "run.created", {"status": "planning"})
+        _commit_event(conn)
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return get_run(run_id, owner_subject)
+
+
+def latest_project_run(project_id: str, owner_subject: str) -> dict | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM research_runs WHERE project_id=? AND owner_subject=? "
+            "ORDER BY created_at DESC,id DESC LIMIT 1", (project_id, owner_subject),
+        ).fetchone()
+    finally:
+        conn.close()
+    return get_run(row["id"], owner_subject) if row else None
+
+
+def discard_project_run(run_id: str, owner_subject: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT status,project_id FROM research_runs WHERE id=? AND owner_subject=?",
+                           (run_id, owner_subject)).fetchone()
+        if row is None or row["project_id"] is None:
+            raise KeyError(run_id)
+        if row["status"] not in TERMINAL_STATUSES:
+            raise ResearchConflictError("Stop the search before discarding its results")
+        conn.execute("DELETE FROM research_runs WHERE id=?", (run_id,))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _unbind_assistant_locked(
     conn: sqlite3.Connection, previous_id: str | None, next_id: str | None
 ) -> None:
@@ -406,8 +462,9 @@ def _row_to_run(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": data["id"],
         "ownerSubject": data["owner_subject"],
-        "threadId": data["thread_id"],
-        "userMessageId": data["user_message_id"],
+        "threadId": data["thread_id"] or "",
+        "userMessageId": data["user_message_id"] or "",
+        "projectId": data.get("project_id"),
         "assistantMessageId": data["assistant_message_id"],
         "status": data["status"],
         "plan": _loads(data["plan_json"], None),
@@ -455,10 +512,12 @@ def get_run(run_id: str, owner_subject: str | None = None) -> dict | None:
             dict(r)
             for r in conn.execute(
                 "SELECT id, step_position AS stepPosition, url, title, snippet, "
-                "fetched_at AS fetchedAt FROM research_sources WHERE run_id = ? ORDER BY id",
+                "fetched_at AS fetchedAt, metadata_json AS metadataJson FROM research_sources WHERE run_id = ? ORDER BY id",
                 (run_id,),
             ).fetchall()
         ]
+        for source in result["sources"]:
+            source.update(_loads(source.pop("metadataJson", None), {}))
         result["documentSources"] = [
             dict(r)
             for r in conn.execute(
@@ -667,7 +726,7 @@ def set_plan(
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status, plan_revision, lease_owner, lease_expires_at, cancel_requested "
+            "SELECT status, plan_revision, lease_owner, lease_expires_at, cancel_requested, project_id "
             "FROM research_runs WHERE id = ?",
             (run_id,),
         ).fetchone()
@@ -687,11 +746,12 @@ def set_plan(
         if expected_revision is not None and revision != expected_revision:
             raise ResearchConflictError(f"Plan revision is {revision}, not {expected_revision}")
         revision += 1
+        next_status = "queued" if row["project_id"] is not None else "awaiting_approval"
         conn.execute(
             "UPDATE research_runs SET plan_json = ?, plan_revision = ?, plan_hash = ?, "
-            "status = 'awaiting_approval', error_message = NULL, lease_owner = NULL, "
+            "status = ?, error_message = NULL, lease_owner = NULL, "
             "lease_expires_at = NULL, updated_at = ? WHERE id = ?",
-            (raw, revision, digest, now_ms(), run_id),
+            (raw, revision, digest, next_status, now_ms(), run_id),
         )
         conn.execute("DELETE FROM research_plan_steps WHERE run_id = ?", (run_id,))
         conn.executemany(
@@ -706,12 +766,14 @@ def set_plan(
             run_id,
             "plan.ready",
             {
-                "status": "awaiting_approval",
+                "status": next_status,
                 "plan": plan,
                 "planRevision": revision,
                 "planHash": digest,
             },
         )
+        if next_status == "queued":
+            _event_locked(conn, run_id, "run.approved", {"status": "queued"})
         _commit_event(conn)
         return {"plan": plan, "planRevision": revision, "planHash": digest}
     except Exception:
@@ -801,7 +863,7 @@ def retry(
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status, retry_count, plan_json, owner_subject, thread_id, config_json "
+            "SELECT status, retry_count, plan_json, owner_subject, thread_id, project_id, config_json "
             "FROM research_runs WHERE id = ?",
             (run_id,),
         ).fetchone()
@@ -818,18 +880,24 @@ def retry(
         ).fetchone()[0]
         if int(spent) >= max_retries:
             raise ResearchConflictError("Retry budget exhausted")
-        claim = conn.execute(
-            "SELECT owner_subject FROM research_thread_claims WHERE thread_id=?",
-            (row["thread_id"],),
-        ).fetchone()
-        if claim is None or claim["owner_subject"] != row["owner_subject"]:
-            raise ResearchConflictError("This run does not own the thread research claim")
         placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
-        active = conn.execute(
-            f"SELECT id FROM research_runs WHERE owner_subject=? AND thread_id=? AND id<>? "
-            f"AND status IN ({placeholders}) LIMIT 1",
-            (row["owner_subject"], row["thread_id"], run_id, *sorted(ACTIVE_STATUSES)),
-        ).fetchone()
+        if row["project_id"] is not None:
+            active = conn.execute(
+                f"SELECT id FROM research_runs WHERE project_id=? AND id<>? AND status IN ({placeholders}) LIMIT 1",
+                (row["project_id"], run_id, *sorted(ACTIVE_STATUSES)),
+            ).fetchone()
+        else:
+            claim = conn.execute(
+                "SELECT owner_subject FROM research_thread_claims WHERE thread_id=?",
+                (row["thread_id"],),
+            ).fetchone()
+            if claim is None or claim["owner_subject"] != row["owner_subject"]:
+                raise ResearchConflictError("This run does not own the thread research claim")
+            active = conn.execute(
+                f"SELECT id FROM research_runs WHERE owner_subject=? AND thread_id=? AND id<>? "
+                f"AND status IN ({placeholders}) LIMIT 1",
+                (row["owner_subject"], row["thread_id"], run_id, *sorted(ACTIVE_STATUSES)),
+            ).fetchone()
         if active is not None:
             raise ResearchConflictError("This thread already has an active research run")
         plan_was_approved = False
@@ -882,8 +950,8 @@ def retry(
 
 
 _CLAIMABLE_SQL = """SELECT r.id FROM research_runs r
-               JOIN research_thread_claims c ON c.thread_id=r.thread_id
-               WHERE r.owner_subject=c.owner_subject
+               LEFT JOIN research_thread_claims c ON c.thread_id=r.thread_id
+               WHERE (r.project_id IS NOT NULL OR r.owner_subject=c.owner_subject)
                  AND r.status IN ('planning','queued','running','cancelling')
                  AND (r.lease_owner IS NULL OR r.lease_expires_at < ?)
                LIMIT 1"""
@@ -908,8 +976,8 @@ def claim_next(worker_id: str, lease_ms: int = 120_000) -> dict | None:
         now = now_ms()
         row = conn.execute(
             """SELECT r.* FROM research_runs r
-               JOIN research_thread_claims c ON c.thread_id=r.thread_id
-               WHERE r.owner_subject=c.owner_subject
+               LEFT JOIN research_thread_claims c ON c.thread_id=r.thread_id
+               WHERE (r.project_id IS NOT NULL OR r.owner_subject=c.owner_subject)
                  AND r.status IN ('planning','queued','running','cancelling')
                  AND (r.lease_owner IS NULL OR r.lease_expires_at < ?)
                ORDER BY r.created_at LIMIT 1""",
@@ -1229,6 +1297,7 @@ def upsert_source(
     title: str,
     snippet: str,
     worker_id: str | None = None,
+    metadata: dict | None = None,
 ) -> bool:
     conn = get_connection()
     try:
@@ -1257,12 +1326,13 @@ def upsert_source(
             raise ValueError(reason)
         fetched_at = now_ms()
         conn.execute(
-            """INSERT INTO research_sources (run_id, step_position, url, title, snippet, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO research_sources (run_id, step_position, url, title, snippet, fetched_at, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(run_id, url) DO UPDATE SET step_position=excluded.step_position,
-               title=excluded.title,
-               snippet=excluded.snippet, fetched_at=excluded.fetched_at""",
-            (run_id, position, url, title[:500], snippet[:4000], fetched_at),
+               title=excluded.title, snippet=excluded.snippet, fetched_at=excluded.fetched_at,
+               metadata_json=COALESCE(excluded.metadata_json,research_sources.metadata_json)""",
+            (run_id, position, url, title[:500], snippet[:4000], fetched_at,
+             json.dumps(metadata, ensure_ascii=False) if metadata is not None else None),
         )
         _event_locked(
             conn,

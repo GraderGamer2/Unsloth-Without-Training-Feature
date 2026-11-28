@@ -263,6 +263,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     # NULL = legacy (assumed current); dedupe re-ingests when the embedder changes.
     if "embedding_model" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN embedding_model TEXT")
+    if "source_metadata" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_metadata TEXT")
     # Folder ownership makes crash cleanup unambiguous without changing retrieval.
     if "linked_folder_id" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN linked_folder_id TEXT")

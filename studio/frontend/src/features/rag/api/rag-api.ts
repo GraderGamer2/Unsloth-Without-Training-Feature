@@ -808,6 +808,10 @@ export function streamFolderSyncJobEvents(
   );
 }
 
+export async function retryProjectResearchDocument(projectId: string, documentId: string): Promise<{jobId: string}> {
+  return ragRequest<{jobId: string}>(`/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/retry-research`, {method: "POST"});
+}
+
 export async function getProjectDocumentExportUrl(projectId: string, documentId: string): Promise<{
   url: string; filename: string; representation: string; sourceUrl: string | null;
 }> {

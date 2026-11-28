@@ -59,6 +59,8 @@ export interface ResearchStepSnapshot extends ResearchPlanStep {
   completedAt?: number | null;
 }
 
+export type ResearchDepth = "deep" | "exhaustive";
+
 export interface ResearchSource {
   id?: string | number;
   stepPosition?: number | null;
@@ -66,6 +68,9 @@ export interface ResearchSource {
   url: string;
   snippet?: string | null;
   fetchedAt?: number;
+  verification?: "downloaded" | "verified" | "unreadable" | "inaccessible";
+  format?: string;
+  error?: string;
 }
 
 export interface ResearchDocumentSource extends ResearchEvidenceSource {
@@ -76,6 +81,9 @@ export interface ResearchDocumentSource extends ResearchEvidenceSource {
 
 export interface ResearchInferenceRequest {
   model: string;
+  providerId?: string;
+  providerType?: string;
+  externalModel?: string;
   temperature?: number;
   topP?: number;
   maxTokens?: number;
@@ -106,6 +114,7 @@ export interface CreateResearchRunInput {
   threadId: string;
   userMessageId: string;
   assistantMessageId?: string;
+  depth?: ResearchDepth;
   inferenceRequest: ResearchInferenceRequest;
   ragScope?: Record<string, unknown>;
   mcpSources?: ResearchMcpSource[];
@@ -121,6 +130,7 @@ export interface CreateResearchRunInput {
 export interface ResearchRun {
   id: string;
   threadId: string;
+  projectId?: string | null;
   userMessageId: string;
   assistantMessageId?: string | null;
   status: ResearchRunStatus;
@@ -132,6 +142,7 @@ export interface ResearchRun {
   documentSources?: ResearchDocumentSource[];
   config?: {
     model?: string;
+    depth?: ResearchDepth;
     inferenceRequest?: Record<string, unknown>;
     ragScope?: Record<string, unknown> | null;
     budgets?: ResearchBudgets;

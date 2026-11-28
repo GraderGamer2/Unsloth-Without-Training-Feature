@@ -382,6 +382,8 @@ def _research_question_context(
     override: str = "",
 ) -> tuple[str, str]:
     """The handoff override folds in the conversation and wins; the raw user message is the fallback."""
+    if not thread_id:
+        return override.strip(), "[]"
     messages = list_chat_messages(thread_id)
     by_id = {str(message["id"]): message for message in messages}
     user = by_id.get(user_message_id)
@@ -1200,7 +1202,7 @@ def _update_assistant(
     reasoning: str = "",
     completion_worker_id: str | None = None,
 ) -> None:
-    if account_is_retired():
+    if account_is_retired() or run.get("projectId"):
         return
     message_id = db.discover_and_bind_assistant_message(run["id"])
     if not message_id:
@@ -2457,7 +2459,15 @@ class ResearchSupervisor:
             enable_thinking = False,
             preview_labels = True,
         )
-        plan = _parse_and_validate_plan(response, planning_reasoning, max_steps)
+        try:
+            plan = _parse_and_validate_plan(response, planning_reasoning, max_steps)
+        except (ValueError, json.JSONDecodeError):
+            if not run.get("projectId"):
+                raise
+            # A small model may emit malformed JSON. The deterministic fallback
+            # still searches the actual question, never an invented topic.
+            from core.research.discovery import fallback_plan
+            plan = fallback_plan(question, max_steps)
         try:
             result = await asyncio.to_thread(
                 db.set_plan,
@@ -2494,7 +2504,15 @@ class ResearchSupervisor:
         max_sources = int(budgets["maxSources"])
         tool_timeout = int(budgets["toolTimeoutSeconds"])
         # default 0 preserves behavior for runs created before auto-scrape.
+        source_only = bool(run.get("projectId"))
+        exhaustive = run["config"].get("depth") == "exhaustive"
         max_auto_scrape = int(budgets.get("maxAutoScrape", 0))
+        if not source_only and run["config"].get("depth"):
+            from core.rag import config as rag_config, embeddings
+            if embeddings.backend_is_loaded(rag_config.effective_embedding_model()):
+                max_auto_scrape = max(max_auto_scrape, 3 if exhaustive else 2)
+        if source_only:
+            max_auto_scrape = 0  # the discovery path verifies candidates directly
         await _refresh_served_context_length(run)
         # prompt overhead fills tiny context windows, so use snippets alone.
         if max_auto_scrape > 0:
@@ -2537,6 +2555,8 @@ class ResearchSupervisor:
             run["userMessageId"],
             str(run["config"].get("question") or ""),
         )
+        from core.research.discovery import DiscoveryFrontier, complementary_search, research_search
+        frontier = await asyncio.to_thread(DiscoveryFrontier, question, run.get("projectId"), exhaustive, max_sources)
         question_urls = [
             url
             for url in dict.fromkeys(
@@ -2553,6 +2573,7 @@ class ResearchSupervisor:
         if resuming:
             sources = list(run.get("sources") or [])[:max_sources]
             document_sources = list(run.get("documentSources") or [])[:max_sources]
+            frontier.restore(sources)
 
         for step in run.get("steps") or []:
             result = step.get("result") if isinstance(step.get("result"), dict) else {}
@@ -2644,6 +2665,15 @@ class ResearchSupervisor:
         )
         for position in range(start_position, max_steps):
             await self._check_active(run["id"])
+            if source_only:
+                # Sources runs share the durable plan and web tool, but use
+                # deterministic coverage instead of spending a model call per action.
+                seed = _next_unused_seed_action(run["plan"], used_queries)
+                action = frontier.next_action(seed, question_urls, fetched_urls, used_queries)
+                if action is None:
+                    break
+            else:
+                action = None
             linked_url = (
                 next(
                     (url for url in question_urls if url not in fetched_urls),
@@ -2652,7 +2682,9 @@ class ResearchSupervisor:
                 if len(sources) < max_sources
                 else None
             )
-            if linked_url is not None:
+            if action is not None:
+                pass
+            elif linked_url is not None:
                 action = {"action": "fetch", "title": "Reading the linked page", "url": linked_url}
             else:
                 source_catalog = "\n".join(
@@ -2761,14 +2793,23 @@ class ResearchSupervisor:
                     if action is None:
                         break
             if action["action"] == "finish":
-                if notes:
+                # Exhaustive search cannot stop while independent plan or
+                # follow-up work remains, even if the model says it is done.
+                fallback = frontier.next_action(
+                    _next_unused_seed_action(run["plan"], used_queries),
+                    question_urls, fetched_urls, used_queries,
+                ) if run["config"].get("depth") else None
+                if fallback is not None:
+                    action = fallback
+                elif notes:
                     next_state = _normalize_research_state(action.get("researchState"))
                     if next_state:
                         research_state = next_state
                     break
-                action = _next_unused_seed_action(run["plan"], used_queries)
-                if action is None:
-                    break
+                else:
+                    action = _next_unused_seed_action(run["plan"], used_queries)
+                    if action is None:
+                        break
             argument = action.get("query") or action.get("url") or ""
             if action["action"] == "search":
                 try:
@@ -2820,14 +2861,18 @@ class ResearchSupervisor:
             mcp_sources = []
             if action["action"] == "fetch":
                 fetched_urls.add(argument)
-                result = await asyncio.to_thread(
-                    execute_tool,
-                    "web_search",
-                    {"url": argument},
-                    cancel_event = self._cancel_event(run["id"]),
-                    timeout = tool_timeout,
-                    website_policy = website_policy,
-                )
+                if source_only:
+                    # Verify exactly once below; don't run a second textual fetch.
+                    result = ""
+                else:
+                    result = await asyncio.to_thread(
+                        execute_tool,
+                        "web_search",
+                        {"url": argument},
+                        cancel_event = self._cancel_event(run["id"]),
+                        timeout = tool_timeout,
+                        website_policy = website_policy,
+                    )
                 rag_result = ""
             else:
                 used_queries.add(argument)
@@ -2856,13 +2901,15 @@ class ResearchSupervisor:
                 side_tasks = [task for task in (rag_task, mcp_task) if task is not None]
                 try:
                     result = await asyncio.to_thread(
-                        execute_tool,
-                        "web_search",
-                        {"query": argument},
-                        cancel_event = self._cancel_event(run["id"]),
-                        timeout = tool_timeout,
-                        website_policy = website_policy,
+                        research_search, argument, website_policy,
+                        self._cancel_event(run["id"]), tool_timeout, exhaustive,
                     )
+                    extra = await asyncio.to_thread(
+                        complementary_search, argument, question, website_policy,
+                        self._cancel_event(run["id"]), tool_timeout,
+                    )
+                    if extra:
+                        result = result + "\n\n---\n\n" + extra
                     rag_result = await rag_task if rag_task is not None else ""
                     if mcp_task is not None:
                         mcp_sources = await mcp_task
@@ -2931,10 +2978,23 @@ class ResearchSupervisor:
                     for match in _URL_BLOCK.finditer(result)
                 ]
                 if action["action"] == "search"
-                else [{"title": argument, "url": argument, "snippet": ""}]
-                if not _research_step_failed(result, [])
+                else [action.get("source") or {"title": argument, "url": argument, "snippet": ""}]
+                if source_only or not _research_step_failed(result, [])
                 else []
             )
+            if source_only:
+                if action["action"] == "search" and not _research_step_failed(result, []):
+                    frontier.successful_searches += 1
+                found_sources = await asyncio.to_thread(
+                    frontier.verify, found_sources, website_policy,
+                    self._cancel_event(run["id"]), tool_timeout,
+                )
+                await self._check_active(run["id"])
+                # Evidence/status live in the source records, not a narrative report.
+                result = "\n\n".join(f"Title: {item['title']}\nURL: {item['url']}\nSnippet: {item.get('snippet', '')}"
+                                     for item in found_sources)
+            if not source_only and run["config"].get("depth"):
+                frontier.observe(found_sources)
             for source in found_sources:
                 if len(sources) >= max_sources:
                     break
@@ -2944,7 +3004,8 @@ class ResearchSupervisor:
                 )
                 if not allowed:
                     continue
-                if source["url"] in {s["url"] for s in sources}:
+                from core.rag.research_source_import import canonical_source_url
+                if canonical_source_url(source["url"]) in {canonical_source_url(s["url"]) for s in sources}:
                     continue
                 sources.append(source)
                 step_sources.append(source)
@@ -2957,6 +3018,7 @@ class ResearchSupervisor:
                     source["title"],
                     source["snippet"],
                     self.worker_id,
+                    metadata = {key: source[key] for key in ("verification", "format", "sha256", "contentSha256", "sourceUrl", "finalUrl", "error") if key in source} or None,
                 )
                 await self._check_worker_write(run["id"], written)
             tool_failed = is_tool_error(result)
@@ -3046,6 +3108,14 @@ class ResearchSupervisor:
             )
             await self._check_worker_write(run["id"], seq is not None)
         await self._check_active(run["id"])
+        if source_only:
+            # A successful empty search is useful (e.g. every result was already retained).
+            if not sources and not frontier.successful_searches and not frontier.skipped:
+                raise ValueError(f"No research step gathered accessible sources. {step_error}".rstrip())
+            actual = await self._finish_terminal(run["id"], "completed", None, "")
+            if actual is None:
+                raise LeaseLost()
+            return
         if not completed_steps and not sources and not document_sources:
             raise ValueError(f"No research step gathered any evidence. {step_error}".rstrip())
         web_entries = [

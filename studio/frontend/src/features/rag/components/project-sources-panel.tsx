@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { FolderAddIcon } from "@/lib/folder-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   announceProjectSourcesUpdated,
   invalidateProjectSources,
@@ -26,6 +26,7 @@ import {
 import { LinkedFoldersManager } from "./linked-folders-manager";
 import { ProjectSourceChip } from "./project-source-chip";
 import { ProjectSourceExport } from "./project-source-export";
+import { ProjectSourceResearch } from "./project-source-research";
 import {
   RAG_SOURCE_UPLOAD_ACCEPT,
   SUPPORTED_SOURCES_HINT,
@@ -39,14 +40,7 @@ import {
 import { useUploadQueue } from "./use-upload-queue";
 import { linkedFolderDocumentsSummary } from "./source-folder-copy";
 
-export function ProjectSourcesPanel({ projectId, onResearch, researchReady = true }: {
-  projectId: string;
-  onResearch?: (question: string) => boolean | Promise<boolean>;
-  researchReady?: boolean;
-}) {
-  const [researchQuery, setResearchQuery] = useState("");
-  const [submittingResearch, setSubmittingResearch] = useState(false);
-  const researchSubmission = useRef(false);
+export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lister = useCallback(
     () => listProjectDocuments(projectId),
@@ -190,39 +184,7 @@ export function ProjectSourcesPanel({ projectId, onResearch, researchReady = tru
           void handleItems(fileItems(files));
         }}
       />
-      {onResearch && (
-        <form className="mb-4 rounded-2xl border border-border bg-muted/30 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const query = researchQuery.trim();
-            if (!researchReady || !query || researchSubmission.current) return;
-            researchSubmission.current = true;
-            setSubmittingResearch(true);
-            void Promise.resolve().then(() => onResearch(query)).then((submitted) => {
-              if (submitted) setResearchQuery(current => current.trim() === query ? "" : current);
-            }).catch(error => toast.error("Could not start source search", { description: String(error) })).finally(() => {
-              researchSubmission.current = false;
-              setSubmittingResearch(false);
-            });
-          }}>
-          <label htmlFor="project-source-research" className="text-sm font-medium">Find sources</label>
-          <textarea id="project-source-research" rows={2} maxLength={1600}
-            value={researchQuery} onChange={(event) => setResearchQuery(event.target.value)}
-            placeholder="What would you like to research?"
-            className="mt-2 w-full resize-y rounded-xl bg-background p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">Web · Deep Research</span>
-            <Button type="submit" size="sm" disabled={!researchReady || !researchQuery.trim() || submittingResearch}>
-              {submittingResearch ? "Starting…" : researchReady ? "Search sources" : "Preparing chat…"}
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {researchReady
-              ? "Uses your selected AI model. Review the research plan, then choose websites and online documents to add to this project."
-              : "You can enter your topic now. Search becomes available when the project chat has initialized."}
-          </p>
-        </form>
-      )}
+      <ProjectSourceResearch key={projectId} projectId={projectId} />
       <div className="mb-4 rounded-2xl bg-muted/30 px-5 py-4">
         <LinkedFoldersManager
           scope={{ type: "project", id: projectId }}

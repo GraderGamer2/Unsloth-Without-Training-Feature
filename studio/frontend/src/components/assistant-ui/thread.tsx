@@ -7059,6 +7059,7 @@ const ComposerToolsMenu: FC<{
     (s) => s.setMcpEnabledForChat,
   );
   const deepResearchEnabled = useChatRuntimeStore((s) => s.deepResearchEnabled);
+  const researchDepth = useChatRuntimeStore((s) => s.researchDepth);
   const setDeepResearchEnabled = useChatRuntimeStore((s) => s.setDeepResearchEnabled);
   const incognito = useChatRuntimeStore((s) => s.incognito);
   const ragEnabled = useChatRuntimeStore((s) => s.ragEnabled);
@@ -7252,25 +7253,24 @@ const ComposerToolsMenu: FC<{
   // Adjustable "+" menu items: pinned ones render top level, the rest go under "More".
   const plusMenuNodes: Record<PlusMenuItemId, ReactNode> = {
     deepResearch: researchAvailable ? (
-      <DropdownMenuItem
-        disabled={researchDisabled && !deepResearchEnabled}
-        className={
-          deepResearchEnabled && !researchDisabled
-            ? "text-primary font-medium"
-            : undefined
-        }
-        onSelect={() => setDeepResearchEnabled(!deepResearchEnabled)}
-      >
-        <HugeiconsIcon icon={Telescope02Icon} strokeWidth={2} />
-        Deep research
-        {deepResearchEnabled && !researchDisabled ? (
-          <HugeiconsIcon
-            icon={Tick02Icon}
-            strokeWidth={2}
-            className="ml-auto"
-          />
-        ) : null}
-      </DropdownMenuItem>
+      <>
+        {(["deep", "exhaustive"] as const).map(depth => (
+          <DropdownMenuItem key={depth}
+            disabled={researchDisabled && !deepResearchEnabled}
+            onSelect={() => {
+              const runtime = useChatRuntimeStore.getState();
+              const same = runtime.deepResearchEnabled && runtime.researchDepth === depth;
+              runtime.setResearchDepth(depth);
+              setDeepResearchEnabled(!same);
+            }}>
+            <HugeiconsIcon icon={Telescope02Icon} strokeWidth={2} />
+            {depth === "deep" ? "Deep Research" : "Exhaustive Research"}
+            {deepResearchEnabled && !researchDisabled &&
+              researchDepth === depth ?
+                <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="ml-auto" /> : null}
+          </DropdownMenuItem>
+        ))}
+      </>
     ) : null,
     browserUse: <BrowserAgentMenuItem />,
     computerUse: <ComputerUseMenuItem />,

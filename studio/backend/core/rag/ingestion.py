@@ -524,7 +524,12 @@ def _run(
         slot.acquire()
         conn = rag_db.get_connection()
         _progress(conn, job_id, "parsing", 0.1)
-        pages = parsers.parse(stored_path)
+        from .research_source_import import IMAGE_EXTS
+        if os.path.splitext(stored_path)[1].lower() in IMAGE_EXTS:
+            from .source_image import image_pages
+            pages = image_pages(stored_path)
+        else:
+            pages = parsers.parse(stored_path)
         is_pdf = stored_path.lower().endswith(".pdf")
         scanned_pages = {p.page_number for p in pages if p.needs_ocr}
         ocred: set[int] = set()
@@ -694,6 +699,7 @@ def start_ingestion(
     content_hash: str | None = None,
     reuse_identical: bool = False,
     stage_slots: threading.Semaphore | None = None,
+    source_metadata: str | None = None,
 ) -> tuple[str, str]:
     """Duplicate hash reuses the existing document; a passed content_hash is trusted, never reverified.
     ``stage_slots`` bounds concurrent parse/store while any number wait to embed together."""
@@ -701,7 +707,8 @@ def start_ingestion(
     if account_is_retired():
         raise RuntimeError("Account is retired")
     ext = os.path.splitext(stored_path)[1].lower()
-    if ext not in config.UPLOAD_EXTS:
+    from .research_source_import import IMAGE_EXTS
+    if ext not in config.UPLOAD_EXTS and not (source_metadata and ext in IMAGE_EXTS):
         raise ValueError(f"unsupported file type: {ext}")
 
     # Reclaim queues for finished jobs so the registry stays bounded.
@@ -841,6 +848,7 @@ def start_ingestion(
             linked_folder_id = linked_folder_id,
             linked_relative_path = linked_relative_path,
             commit = False,
+            source_metadata = source_metadata,
         )
         job_id = _new_job(conn, document_id, scope)
     finally:
@@ -886,6 +894,50 @@ def start_ingestion(
             conn.close()
         raise
     return document_id, job_id
+
+
+def retry_research_document(document_id: str, scope: str, stage_slots=None) -> str:
+    effective_model = config.effective_embedding_model()
+    conn = rag_db.get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        doc = store.get_visible_document(conn, document_id)
+        if not doc or doc["scope"] != scope or not doc.get("source_metadata") or doc["status"] != "failed":
+            raise ValueError("Only a failed retained research source can be retried.")
+        path = doc.get("stored_path")
+        if not path or not os.path.isfile(path):
+            raise ValueError("The retained original is missing.")
+        account_path(path)
+        if _sha256_file(path) != doc["sha256"]:
+            raise ValueError("The retained original has changed; remove it and import again.")
+        # Failed jobs can leave chunks from a late write. Use the existing
+        # document cleanup method only if there are no chunks; otherwise fail
+        # closed rather than duplicate vectors.
+        if conn.execute("SELECT 1 FROM chunks WHERE document_id=? LIMIT 1", (document_id,)).fetchone():
+            raise ValueError("This failed index contains partial chunks; remove and reimport it to repair.")
+        conn.execute("UPDATE documents SET status='pending',error=NULL,num_chunks=0 WHERE id=?", (document_id,))
+        job_id = _new_job(conn, document_id, scope)
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    try:
+        job_leases.activate(job_leases.INGESTION, job_id)
+        with _jobs_lock:
+            _jobs[account_key(job_id)] = queue.Queue()
+        worker = account_thread(target=_run, args=(job_id, document_id, scope, path,
+            effective_model, True, True, None, stage_slots), daemon=True)
+        with _jobs_lock:
+            _workers[account_key(job_id)] = worker
+        worker.start()
+    except Exception:
+        with _jobs_lock:
+            _workers.pop(account_key(job_id), None)
+        job_leases.release(job_leases.INGESTION, job_id)
+        fail_stalled_job(job_id, "Ingestion worker could not start")
+        raise
+    return job_id
 
 
 def job_worker_alive(job_id: str) -> bool:

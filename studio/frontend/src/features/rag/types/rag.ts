@@ -25,6 +25,7 @@ export interface RagDocument {
   projectId?: string | null;
   linkedFolderId?: string | null;
   managed: boolean;
+  researchSource?: boolean;
   createdAt?: string | null;
 }
 

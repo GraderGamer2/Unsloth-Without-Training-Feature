@@ -5011,6 +5011,7 @@ export function createOpenAIStreamAdapter(
             threadId: resolvedThreadId,
             userMessageId: userMessage.id,
             assistantMessageId: unstable_assistantMessageId,
+            depth: runtime.researchDepth,
             inferenceRequest,
             // omit empty fields: old backends reject unknown fields with 422.
             ...(researchQuestion ? { question: researchQuestion } : {}),

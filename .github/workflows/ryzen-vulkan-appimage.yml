@@ -406,6 +406,8 @@ jobs:
         run: |
           python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py studio/backend/core/inference/context_window.py studio/backend/core/inference/studio_tool_loop.py studio/backend/core/inference/llama_tool_schema.py studio/backend/core/rag/store.py studio/backend/core/rag/embed_connection.py studio/backend/core/research_runs.py
           python3 studio/backend/tests/test_personal_backend_fastpaths.py
+          python3 studio/backend/tests/test_project_source_scope.py
+          python3 -m py_compile studio/backend/core/research/discovery.py studio/backend/core/rag/source_image.py studio/backend/storage/research_project_scope.py studio/backend/storage/research_runs_db.py studio/backend/storage/studio_db.py studio/backend/routes/research_runs.py studio/backend/routes/rag.py studio/backend/core/rag/research_source_import.py
           python3 studio/src-tauri/linux/test-personal-llama-vulkan.py
           python3 studio/src-tauri/linux/test-personal-runtime.py
           python3 studio/backend/tests/test_personal_release_fastpaths.py
@@ -462,6 +464,11 @@ jobs:
                   "studio/backend/core/research/prompts.py",
                   "studio/backend/routes/rag.py",
                   "studio/backend/core/rag/research_source_import.py",
+                  "studio/backend/core/research/discovery.py",
+                  "studio/backend/core/rag/source_image.py",
+                  "studio/backend/storage/research_project_scope.py",
+                  "studio/backend/storage/research_runs_db.py",
+                  "studio/backend/routes/research_runs.py",
               ):
                   assert wheel.read(path) == Path(path).read_bytes(), path
               route_tree = ast.parse(wheel.read("studio/backend/routes/rag.py"))

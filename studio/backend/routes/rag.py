@@ -240,6 +240,7 @@ def _doc_view(row: dict) -> dict:
         "linkedFolderId": row.get("linked_folder_id"),
         "managed": bool(row.get("linked_folder_id")),
         "createdAt": row.get("created_at"),
+        "researchSource": bool(row.get("source_metadata")),
     }
 
 
@@ -686,8 +687,15 @@ def import_research_source(
     scope = store.project_scope(project_id)
     _raise_if_scope_retired(scope, "Project is being deleted")
     run = research_runs_db.get_run(payload.runId, owner_subject = subject)
-    thread = get_chat_thread(run["threadId"]) if run else None
-    if not thread or thread.get("projectId") != project_id:
+    def belongs_to_project(candidate):
+        if not candidate:
+            return False
+        if candidate.get("projectId"):
+            return candidate["projectId"] == project_id
+        thread = get_chat_thread(candidate["threadId"])
+        return bool(thread and thread.get("projectId") == project_id)
+
+    if not belongs_to_project(run):
         raise HTTPException(status_code = 404, detail = "Research run not found in this project")
     if run["status"] not in {"completed", "failed", "cancelled"}:
         raise HTTPException(status_code = 409, detail = "Research must stop before importing sources")
@@ -695,10 +703,10 @@ def import_research_source(
         url, title, policy = research_source_import.resolve_source(run, payload.url, payload.websitePolicy)
     except ValueError as exc:
         raise HTTPException(status_code = 422, detail = str(exc)) from exc
-    def retained():
+    def retained(candidate=url):
         conn = _rag_connection()
         try:
-            return research_source_import.retained_source(store.list_documents(conn, scope), url)
+            return research_source_import.retained_source(store.list_documents(conn, scope), candidate)
         finally:
             conn.close()
 
@@ -712,25 +720,27 @@ def import_research_source(
     if not research_source_import.FETCH_SLOTS.acquire(blocking = False):
         raise HTTPException(status_code = 429, detail = "Source importer is busy. Retry this source shortly.")
     try:
+        details = {}
         try:
             filename, content = research_source_import.fetch_source_payload(
-                url, title, policy, config.MAX_UPLOAD_BYTES,
+                url, title, policy, config.MAX_UPLOAD_BYTES, details=details,
             )
         except ValueError as exc:
             raise HTTPException(status_code = 422, detail = str(exc)) from exc
         stored_path, filename, content_hash = _persist_upload_stream(
             BytesIO(content), _document_label(filename),
             empty_detail = "No readable source content.",
+            extra_exts = research_source_import.IMAGE_EXTS,
         )
         try:
             with folder_sync.scope_lock(scope):
                 _require_scope_owner("project", project_id)
                 _raise_if_scope_retired(scope, "Project is being deleted")
-                current = get_chat_thread(run["threadId"])
-                if not current or current.get("projectId") != project_id:
+                current = research_runs_db.get_run(payload.runId, owner_subject=subject)
+                if not belongs_to_project(current):
                     raise HTTPException(status_code = 409, detail = "Research chat moved or was deleted")
                 # A concurrent import may have completed while this request fetched.
-                existing = retained()
+                existing = retained() or retained(details.get("finalUrl") or url)
                 if existing is not None:
                     _remove_stored_upload(stored_path)
                     return already_retained(existing)
@@ -738,9 +748,16 @@ def import_research_source(
                 # ingestion (which also has transactional content-hash deduplication).
                 conn = _rag_connection()
                 try:
+                    def same_content(doc):
+                        if doc.get("sha256") == content_hash:
+                            return True
+                        try:
+                            metadata = json.loads(doc.get("source_metadata") or "{}")
+                            return bool(details.get("contentSha256") and metadata.get("contentSha256") == details["contentSha256"])
+                        except (TypeError, ValueError):
+                            return False
                     existing = next((doc for doc in store.list_documents(conn, scope)
-                                     if doc.get("sha256") == content_hash
-                                     and doc.get("status") in {"completed", "pending", "running"}), None)
+                                     if same_content(doc) and (doc.get("status") in {"completed", "pending", "running"} or doc.get("source_metadata"))), None)
                 finally:
                     conn.close()
                 if existing is not None:
@@ -750,8 +767,11 @@ def import_research_source(
                     document_id, job_id = ingestion.start_ingestion(
                         scope, None, None, filename, stored_path,
                         project_id = project_id,
-                        ocr = None if filename.lower().endswith(".pdf") else False,
-                        caption = False, content_hash = content_hash,
+                        ocr = True if filename.lower().endswith(".pdf") else None,
+                        caption = True, content_hash = content_hash,
+                        source_metadata = json.dumps({key: details[key] for key in
+                            ("sourceUrl","finalUrl","title","retrievedAt","contentType","originalFilename","representation","contentSha256")
+                            if key in details}, ensure_ascii=False),
                         stage_slots = research_source_import.INDEX_SLOTS,
                     )
         except Exception:
@@ -786,8 +806,19 @@ def project_document_export_url(
         if not path or not os.path.isfile(path) or not _is_managed_preview_path(path):
             raise HTTPException(status_code = 404, detail = "Stored source file is unavailable")
         filename = doc["filename"]
-        representation = "stored file"
-        source_url = None
+        try:
+            metadata = json.loads(doc.get("source_metadata") or "{}")
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except (ValueError, TypeError):
+            metadata = {}
+        representation = metadata.get("representation") or "stored file"
+        source_url = metadata.get("sourceUrl")
+        # Prefer the original server-supplied basename when its actual format
+        # matches, without allowing a misleading extension or destination path.
+        original = _sanitize_filename(str(metadata.get("originalFilename") or ""))
+        if os.path.splitext(original)[1].lower() == os.path.splitext(filename)[1].lower():
+            filename = original
         if re.search(r"\[web-[0-9a-f]{10}\]\.md$", filename):
             # A retained Markdown download can also carry a URL marker in its
             # filename. Only the actual snapshot header identifies a derivative.
@@ -806,6 +837,30 @@ def project_document_export_url(
     token = _sign_document(document_id)
     return {"url": f"/api/rag/documents/{document_id}/file-signed?token={token}",
             "filename": filename, "representation": representation, "sourceUrl": source_url}
+
+
+@router.post("/projects/{project_id}/documents/{document_id}/retry-research")
+def retry_project_research_document(project_id: str, document_id: str,
+                                    subject: str = Depends(get_current_subject)):
+    from core.rag import research_source_import
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    scope = store.project_scope(project_id)
+    with folder_sync.scope_lock(scope):
+        _require_scope_owner("project", project_id)
+        _raise_if_scope_retired(scope, "Project is being deleted")
+        try:
+            conn = _rag_connection()
+            try:
+                doc = store.get_visible_document(conn, document_id)
+                if not doc or doc.get("scope") != scope or not _is_managed_preview_path(doc.get("stored_path") or ""):
+                    raise ValueError("Retained original is unavailable in this project")
+            finally:
+                conn.close()
+            job_id = ingestion.retry_research_document(document_id, scope, research_source_import.INDEX_SLOTS)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"jobId": job_id}
 
 
 @router.get("/projects/{project_id}/documents")

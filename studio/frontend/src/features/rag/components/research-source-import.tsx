@@ -7,11 +7,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { announceProjectSourcesUpdated, importResearchSource, invalidateProjectSources } from "../api/rag-api";
 import { watchIngestion } from "../api/save-markdown-source";
 
-export function ResearchSourceImport({ run }: { run: ResearchRun }) {
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+export function ResearchSourceImport({ run, onDiscard }: { run: ResearchRun; onDiscard?: () => void }) {
+  const [projectId, setProjectId] = useState<string | null>(run.projectId ?? null);
+  const [expanded, setExpanded] = useState(Boolean(run.projectId));
   const sources = useMemo(() => Array.from(new Map(run.sources.map(s => [s.url, s])).values()), [run.sources]);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(sources.map(s => s.url)));
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(sources.filter(s => s.verification !== "inaccessible").map(s => s.url)));
   const [queued, setQueued] = useState<Set<string>>(new Set());
   const [indexed, setIndexed] = useState<Set<string>>(new Set());
   const [existing, setExisting] = useState<Set<string>>(new Set());
@@ -23,11 +23,12 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
   useEffect(() => {
     active.current = true;
     let cancelled = false;
-    void getStoredChatThread(run.threadId).then(thread => {
+    if (run.projectId) setProjectId(run.projectId);
+    else void getStoredChatThread(run.threadId).then(thread => {
       if (!cancelled) setProjectId(thread?.projectId ?? null);
     }).catch(() => {});
     return () => { cancelled = true; active.current = false; };
-  }, [run.threadId]);
+  }, [run.threadId, run.projectId]);
 
   const remaining = sources.filter(s => !queued.has(s.url));
   const count = remaining.filter(s => selected.has(s.url)).length;
@@ -50,7 +51,10 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
             setErrors(prev => { const next = { ...prev }; delete next[source.url]; return next; });
           }
           if (result.existing || !result.jobId) {
-            if (active.current) setExisting(prev => new Set(prev).add(source.url));
+            if (active.current) {
+              setExisting(prev => new Set(prev).add(source.url));
+              if (result.status === "failed") setErrors(prev => ({...prev, [source.url]: "Original already retained but not indexed. Retry from the project Sources list."}));
+            }
             continue;
           }
           void watchIngestion(target, result.jobId, result.filename || source.title).then(job => {
@@ -76,12 +80,13 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
   if (!projectId || !sources.length) return null;
   return (
     <div className="my-3 rounded-xl border border-border p-3">
-      <Button type="button" variant="outline" size="sm" onClick={() => setExpanded(v => !v)}>
-        {expanded ? "Hide source selection" : "Add research sources to project"}
-      </Button>
+      {run.projectId ? <p className="font-medium">Which sources would you like to keep?</p> :
+        <Button type="button" variant="outline" size="sm" onClick={() => setExpanded(v => !v)}>
+          {expanded ? "Hide source selection" : "Add research sources to project"}
+        </Button>}
       {expanded && <div className="mt-3 space-y-3">
         <p className="text-xs text-muted-foreground">
-          Fetch original accessible source content, not the AI report. Supported PDF, Office, OpenDocument, EPUB and text downloads retain their original bytes. Web pages are saved as readable text snapshots; unsupported image or binary formats report an error. Added sources use the project's normal embedding and retrieval settings.
+          Fetch original accessible source content, not the AI report. Supported PDF, Office, OpenDocument, EPUB and text downloads retain their original bytes. HTML originals are retained where available; some web pages remain text snapshots. Images use loaded vision or local OCR when available and otherwise remain downloadable, not indexed. Added sources use the project's normal embedding and retrieval settings.
         </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={remaining.length > 0 && count === remaining.length} disabled={busy || !remaining.length}
@@ -98,6 +103,10 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
             <span className="min-w-0 flex-1 text-sm">
               <span className="block break-words">{source.title || source.url}</span>
               <span className="block break-all text-xs text-muted-foreground">{source.url}</span>
+              {source.verification && <span className="block text-xs text-muted-foreground">
+                {source.format ? source.format + " · " : ""}{source.verification === "verified" || source.verification === "downloaded" ? "Downloaded; not yet indexed" : source.verification === "unreadable" ? "Downloaded; text not verified" : "Inaccessible"}
+              </span>}
+              {source.error && <span className="block text-xs text-destructive">{source.error}</span>}
               {queued.has(source.url) && <span className="block text-xs text-muted-foreground">
                 {existing.has(source.url) ? "Already retained in this project" : indexed.has(source.url) ? "Indexed in project" : "Submitted to project indexing"}
               </span>}
@@ -106,8 +115,11 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
           </label>)}
         </div>
         <Button type="button" size="sm" disabled={busy || count === 0} onClick={() => void importSelected()}>
-          {busy ? "Importing sources…" : `Import selected (${count})`}
+          {busy ? "Importing sources…" : `Keep selected (${count})`}
         </Button>
+        {onDiscard && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onDiscard}>
+          Discard remaining candidates
+        </Button>}
       </div>}
     </div>
   );

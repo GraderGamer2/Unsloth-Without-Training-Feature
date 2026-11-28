@@ -78,6 +78,23 @@ export async function createResearchRun(
   );
 }
 
+export async function createProjectResearchRun(
+  projectId: string,
+  input: Pick<CreateResearchRunInput, "inferenceRequest" | "depth" | "budgets" | "websitePolicy"> & {question: string},
+): Promise<ResearchRun> {
+  return json<ResearchRun>(await authFetch(`/api/chat/research-runs/project/${encodeURIComponent(projectId)}`, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(input),
+  }));
+}
+
+export async function latestProjectResearchRun(projectId: string, signal?: AbortSignal): Promise<ResearchRun | null> {
+  return json<ResearchRun | null>(await authFetch(`/api/chat/research-runs/project/${encodeURIComponent(projectId)}/latest`, {signal}));
+}
+
+export async function discardProjectResearchRun(projectId: string, runId: string): Promise<void> {
+  await json(await authFetch(`/api/chat/research-runs/project/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}`, {method: "DELETE"}));
+}
+
 export async function getResearchRun(
   id: string,
   signal?: AbortSignal,
