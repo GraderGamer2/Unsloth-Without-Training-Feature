@@ -26,6 +26,8 @@ export interface RagDocument {
   linkedFolderId?: string | null;
   managed: boolean;
   researchSource?: boolean;
+  extraction?: string | null;
+  extractionWarning?: string | null;
   createdAt?: string | null;
 }
 

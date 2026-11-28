@@ -228,6 +228,12 @@ def _is_managed_preview_path(stored_path: str) -> bool:
 
 
 def _doc_view(row: dict) -> dict:
+    try:
+        metadata = json.loads(row.get("source_metadata") or "{}")
+        if not isinstance(metadata, dict):
+            metadata = {}
+    except (ValueError, TypeError):
+        metadata = {}
     return {
         "id": row["id"],
         "filename": row["filename"],
@@ -241,6 +247,8 @@ def _doc_view(row: dict) -> dict:
         "managed": bool(row.get("linked_folder_id")),
         "createdAt": row.get("created_at"),
         "researchSource": bool(row.get("source_metadata")),
+        "extraction": metadata.get("extraction"),
+        "extractionWarning": metadata.get("extractionWarning"),
     }
 
 
@@ -720,12 +728,24 @@ def import_research_source(
     if not research_source_import.FETCH_SLOTS.acquire(blocking = False):
         raise HTTPException(status_code = 429, detail = "Source importer is busy. Retry this source shortly.")
     try:
+        from core.research.temporary_sources import cache, run_scope
+        cache_scope = run_scope(project_id, payload.runId)
+        recorded = next((item for item in run.get("sources", []) if item.get("url") == payload.url), {})
+        cached = cache.read(cache_scope, url, policy, recorded.get("sha256"))
         details = {}
         try:
-            filename, content = research_source_import.fetch_source_payload(
-                url, title, policy, config.MAX_UPLOAD_BYTES, details=details,
-            )
+            if cached is not None:
+                filename, content, details = cached
+            else:
+                filename, content = research_source_import.fetch_source_payload(
+                    url, title, policy, config.MAX_UPLOAD_BYTES, details=details,
+                    skip_url=lambda candidate: retained(candidate) is not None,
+                )
         except ValueError as exc:
+            if details.get("skippedExisting"):
+                existing = retained(details.get("finalUrl") or url)
+                if existing is not None:
+                    return already_retained(existing)
             raise HTTPException(status_code = 422, detail = str(exc)) from exc
         stored_path, filename, content_hash = _persist_upload_stream(
             BytesIO(content), _document_label(filename),
@@ -780,6 +800,7 @@ def import_research_source(
         if get_chat_project(project_id) is None:
             _discard_document(document_id)
             raise HTTPException(status_code = 404, detail = "Project not found")
+        cache.remove(cache_scope, url)
         return {"documentId": document_id, "jobId": job_id, "filename": filename}
     finally:
         research_source_import.FETCH_SLOTS.release()

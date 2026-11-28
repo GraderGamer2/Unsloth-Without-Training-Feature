@@ -19,6 +19,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
 import zipfile
 
 ROOTS = {"studio", "unsloth", "unsloth_cli"}
@@ -233,6 +234,50 @@ def wheel_contract(wheel, site, old_dist, expected):
         return new_dist
 
 
+def maintain_owned_caches(root, uv):
+    """Best effort, after a verified wheel transaction while runtime lock is held."""
+    base = root / "cache"
+    if not base.is_dir() or base.is_symlink() or base.resolve() != root.resolve() / "cache":
+        return
+    stamp = base / ".personal-cache-maintenance"
+    if stamp.is_symlink():
+        return
+    try:
+        if stamp.is_file() and time.time() - stamp.stat().st_mtime < 7 * 86400:
+            return
+    except OSError:
+        return
+    env = {key: value for key, value in os.environ.items()
+           if not key.lower().startswith(("uv_", "pip_", "npm_config_", "python"))
+           and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
+    # Only fixed application caches; never follow a shared-cache symlink.
+    target = base / "uv"
+    if target.is_dir() and not target.is_symlink() and target.resolve() == base.resolve() / "uv":
+        try:
+            subprocess.run([str(uv), "--no-config", "--offline", "cache", "prune",
+                            "--cache-dir", str(target)], env=env, pass_fds=lock_fds(),
+                           timeout=30, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    target = base / "npm"
+    node = root / "node/bin/node"
+    npm = root / "node/bin/npm"
+    if (target.is_dir() and not target.is_symlink() and target.resolve() == base.resolve() / "npm"
+            and node.is_file() and npm.is_file() and node.resolve().is_relative_to(root.resolve() / "node")
+            and npm.resolve().is_relative_to(root.resolve() / "node")):
+        try:
+            subprocess.run([str(node), str(npm), "cache", "verify", "--offline",
+                            "--cache", str(target), "--logs-max=0", "--loglevel=error",
+                            "--no-update-notifier"], env=env, pass_fds=lock_fds(),
+                           timeout=30, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        publish_json(stamp, {"checked": int(time.time())})
+    except OSError:
+        pass
+
+
 def update(root, wheel, expected):
     venv, site = location(root)
     recover(venv, site)
@@ -308,6 +353,11 @@ def update(root, wheel, expected):
         recover(venv, site)
         raise RuntimeError("Offline backend replacement failed; previous backend restored") from error
     recover(venv, site)
+    # Maintenance failure must never undo a verified backend replacement.
+    try:
+        maintain_owned_caches(root, uv)
+    except (OSError, ValueError, RuntimeError):
+        pass
 
 
 def main():

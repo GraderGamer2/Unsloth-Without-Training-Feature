@@ -815,6 +815,21 @@ pub fn save_native_source_manifest(
 }
 
 #[tauri::command]
+pub fn open_native_export_directory(
+    webview: tauri::Webview,
+    registry: State<'_, NativeSaveRegistry>,
+    token: String,
+) -> Result<(), String> {
+    crate::native_intents::ensure_main_window(&webview)?;
+    let directory = registry.resolve_directory(&token)?;
+    if !directory.is_dir() {
+        return Err("The selected export folder no longer exists.".into());
+    }
+    tauri_plugin_opener::open_path(directory.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn release_native_download_directory(
     webview: tauri::Webview,
     registry: State<'_, NativeSaveRegistry>,

@@ -59,7 +59,7 @@ def research_search(query, policy, cancel, timeout, exhaustive):
                        timeout=timeout, cancel_event=cancel, website_policy=policy)
 
 
-def complementary_search(query, question, policy, cancel, timeout):
+def _crossref_search(query, question, policy, cancel, timeout):
     """Public Crossref metadata, only for explicitly academic questions.
 
     No account/email is fabricated; one shared request every two seconds and
@@ -114,6 +114,22 @@ def complementary_search(query, question, policy, cancel, timeout):
             doi = " ".join(str(item.get("DOI") or "").split())[:200]
             found.append(f"Title: {title}\nURL: {candidate}\nSnippet: Crossref publication metadata; DOI {doi}. Full-text access not yet verified.")
     return "\n\n---\n\n".join(found)
+
+
+def complementary_search(query, question, policy, cancel, timeout):
+    if not _ACADEMIC.search(question) or cancel.is_set():
+        return ""
+    from core.research.academic_providers import openalex_search, europe_pmc_search, as_search_results
+    try:
+        crossref = _crossref_search(query, question, policy, cancel, min(8, timeout))
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+        crossref = ""
+    if cancel.is_set():
+        return crossref
+    other = openalex_search(query, policy, cancel, min(8, timeout))
+    if re.search(r"\b(?:medical|medicine|clinical|health|biology|biomedical|disease|pharmac|cancer|patient|vaccine|epidemiol)\w*\b", question, re.I):
+        other.extend(europe_pmc_search(query, policy, cancel, min(8, timeout)))
+    return "\n\n---\n\n".join(part for part in (crossref, as_search_results(other)) if part)
 
 
 class _Links(HTMLParser):
@@ -190,20 +206,15 @@ def retained_documents(project_id):
 
 class DiscoveryFrontier:
     """Bounded search frontier. Existing project sources are excluded only for source discovery."""
-    def __init__(self, question, project_id, exhaustive, max_sources):
+    def __init__(self, question, project_id, exhaustive, max_sources, run_id=None):
         self.question = question
         self.project_id = project_id
+        self.run_id = run_id
         self.exhaustive = exhaustive
         self.limit = max_sources
-        self.docs = retained_documents(project_id)
-        self.known_hashes = {str(doc.get("sha256")) for doc in self.docs if doc.get("status") != "failed" or doc.get("source_metadata")}
-        for doc in self.docs:
-            try:
-                meta = json.loads(doc.get("source_metadata") or "{}")
-                if meta.get("contentSha256"):
-                    self.known_hashes.add(meta["contentSha256"])
-            except (TypeError, ValueError):
-                pass
+        self.docs = []
+        self.known_hashes = set()
+        self.refresh_retained()
         self.seen = set()
         self.hashes = set()
         self.pending = deque()
@@ -212,16 +223,45 @@ class DiscoveryFrontier:
         self.attempts = 0
         self.skipped = 0
         self.successful_searches = 0
+        self.verified_count = 0
+        self.domains = set()
+        self.covered_words = set()
+        try:
+            self.question_words = words(_sanitize_public_query(question))
+        except ValueError:
+            self.question_words = set()
+        self.dry_searches = 0
+        self.followups = deque()
+        self.followup_keys = set()
+        self.query_vector = None
+        self.query_identity = None
+        self.fetch_turn = False
+        self.stop_reason = ""
 
+    def refresh_retained(self):
+        self.docs = retained_documents(self.project_id)
+        self.known_hashes = {str(doc.get("sha256")) for doc in self.docs if doc.get("status") != "failed" or doc.get("source_metadata")}
+        for doc in self.docs:
+            try:
+                meta = json.loads(doc.get("source_metadata") or "{}")
+                if isinstance(meta, dict) and meta.get("contentSha256"):
+                    self.known_hashes.add(meta["contentSha256"])
+            except (TypeError, ValueError):
+                pass
     def restore(self, sources):
         for source in sources:
             try:
                 self.seen.add(canonical_source_url(source["url"]))
                 if source.get("finalUrl"):
                     self.seen.add(canonical_source_url(source["finalUrl"]))
-                if source.get("sha256"):
-                    self.hashes.add(source["sha256"])
+                for field in ("sha256", "contentSha256"):
+                    if source.get(field):
+                        self.hashes.add(source[field])
                 self.count += 1
+                if source.get("verification") in {"verified", "downloaded", "unreadable"}:
+                    self.verified_count += 1
+                    self.domains.add(urlsplit(source.get("finalUrl") or source["url"]).hostname or "")
+                    self.covered_words.update(self.question_words & words(source.get("title", "") + " " + (source.get("snippet") or "")))
             except (KeyError, ValueError):
                 pass
 
@@ -245,32 +285,101 @@ class DiscoveryFrontier:
             self.pending_keys.add(key)
             self.pending.append(dict(item))
 
-    def next_action(self, seed, explicit_urls, fetched_urls, used_queries):
-        if self.count >= self.limit or self.attempts >= self.limit * 3:
-            return None
-        for url in explicit_urls:
-            if url not in fetched_urls and canonical_source_url(url) not in self.seen and not self.retained(url):
-                return {"action": "fetch", "title": "Read supplied source", "url": url}
-        # Prioritize planned coverage, then investigate discovered links.
-        if seed is not None:
-            return seed
-        minimum = 6 if self.exhaustive else 3
-        if len(used_queries) < minimum:
-            for step in fallback_plan(self.question, minimum)["steps"]:
-                if step["query"] not in used_queries:
-                    return {"action": "search", "title": step["title"], "query": step["query"]}
+    def _next_pending(self, fetched_urls):
+        self.pending = deque(sorted(self.pending, key=lambda item: (
+            -len(self.question_words & words(item.get("title", "") + " " + (item.get("snippet") or ""))),
+            not bool(_DOCUMENT.search(item["url"])),
+            urlsplit(item["url"]).hostname in self.domains,
+        )))
         while self.pending:
             item = self.pending.popleft()
             key = canonical_source_url(item["url"])
             self.pending_keys.discard(key)
-            if key not in self.seen and item["url"] not in fetched_urls and not self.retained(item["url"]):
-                return {"action": "fetch", "title": item["title"][:120], "url": item["url"], "source": item}
+            if key in self.seen or item["url"] in fetched_urls:
+                continue
+            if self.retained(item["url"]):
+                self.skipped += 1
+                self.seen.add(key)
+                continue
+            return {"action": "fetch", "title": item["title"][:120], "url": item["url"], "source": item}
+        return None
+
+    def _follow_up(self, query):
+        try:
+            value = _sanitize_public_query(query)
+        except ValueError:
+            return
+        if value not in self.followup_keys and len(self.followup_keys) < (24 if self.exhaustive else 8):
+            self.followup_keys.add(value)
+            self.followups.append(value)
+
+    def record_batch(self, action, items):
+        good = [item for item in items if item.get("verification") != "inaccessible"]
+        for item in good:
+            self.verified_count += 1
+            self.domains.add(urlsplit(item.get("finalUrl") or item["url"]).hostname or "")
+            self.covered_words.update(self.question_words & words(item.get("title", "") + " " + (item.get("snippet") or "")))
+        if action == "search":
+            self.dry_searches = 0 if good else self.dry_searches + 1
+        if _ACADEMIC.search(self.question):
+            for item in items:
+                if item.get("verification") == "inaccessible":
+                    title = item.get("title", "")
+                    if title and not title.startswith(("http://", "https://")):
+                        self._follow_up(title[:220] + " open access repository full text")
+        missing = self.question_words - self.covered_words
+        if missing and good:
+            self._follow_up(self.question[:330] + " " + " ".join(sorted(missing)[:6]) + " evidence")
+
+    def summary(self):
+        return {"downloaded": self.verified_count, "skippedExisting": self.skipped,
+                "distinctDomains": len(self.domains - {""}),
+                "uncoveredTerms": sorted(self.question_words - self.covered_words)[:12],
+                "stopReason": self.stop_reason}
+
+    def next_action(self, seed, explicit_urls, fetched_urls, used_queries):
+        if self.count >= self.limit or self.attempts >= self.limit * 3:
+            self.stop_reason = "Source/verification budget reached"
+            return None
+        for url in explicit_urls:
+            if url not in fetched_urls and canonical_source_url(url) not in self.seen:
+                if self.retained(url):
+                    self.seen.add(canonical_source_url(url))
+                    self.skipped += 1
+                    continue
+                return {"action": "fetch", "title": "Read supplied source", "url": url}
+        minimum = 6 if self.exhaustive else 3
+        if len(used_queries) >= 2 and self.pending and self.fetch_turn:
+            self.fetch_turn = False
+            pending = self._next_pending(fetched_urls)
+            if pending:
+                return pending
+        if seed is not None:
+            self.fetch_turn = True
+            return seed
+        if len(used_queries) < minimum:
+            for step in fallback_plan(self.question, minimum)["steps"]:
+                if step["query"] not in used_queries:
+                    self.fetch_turn = True
+                    return {"action": "search", "title": step["title"], "query": step["query"]}
+        pending = self._next_pending(fetched_urls)
+        if pending:
+            return pending
+        if self.dry_searches >= (5 if self.exhaustive else 3):
+            self.stop_reason = "Diminishing returns after planned searches and links"
+            return None
+        while self.followups:
+            query = self.followups.popleft()
+            if query not in used_queries:
+                return {"action": "search", "title": "Investigate remaining coverage", "query": query}
+        self.stop_reason = "Planned and discovered search paths exhausted"
         return None
 
     def verify(self, candidates, policy, cancel, timeout):
         """Verify in bounded pairs, retaining actual acquisition status and content hashes."""
         from core.rag import config
         incoming = list(candidates)
+        self.refresh_retained()
         self.observe(incoming)
         priority = set()
         for item in incoming:
@@ -312,14 +421,20 @@ class DiscoveryFrontier:
             except (ValueError, OSError) as error:
                 if details.get("skippedExisting"):
                     return {"skip": True}
-                return {**item, "verification": "inaccessible", "error": str(error)[:300]}
+                from core.research.academic_providers import alternatives_for_doi
+                alternatives = alternatives_for_doi(item["url"], item["title"], policy, cancel, max(1, int(deadline-time.monotonic()))) if time.monotonic() < deadline else []
+                return {**item, "verification": "inaccessible", "error": str(error)[:300], "links": alternatives}
             if cancel.is_set():
                 return None
             sha = hashlib.sha256(payload).hexdigest()
             fmt = filename.rsplit(".", 1)[-1].upper()
             content_hash = details.get("contentSha256") or sha
-            return {**item, "verification": "downloaded", "format": fmt,
-                    "sha256": sha, "contentSha256": content_hash,
+            from core.research.temporary_sources import remember
+            cached = remember(self.project_id, self.run_id, item["url"], filename, payload, details, policy)
+            extracted = details.get("text") or ""
+            return {**item, "verification": "verified" if extracted else "downloaded", "format": fmt,
+                    "cached": cached, "sha256": sha, "contentSha256": content_hash,
+                    "snippet": extracted[:800] if extracted else item.get("snippet", ""),
                     "finalUrl": details.get("finalUrl") or item["url"],
                     "links": relevant_links(details.get("html") or "", details.get("finalUrl") or item["url"],
                                             self.question, policy, 24 if self.exhaustive else 12),
@@ -338,6 +453,9 @@ class DiscoveryFrontier:
                 hashes = {result[key] for key in ("sha256", "contentSha256") if result.get(key)}
                 if result["verification"] != "inaccessible" and (hashes & (self.known_hashes | self.hashes) or (final and self.retained(final))):
                     self.skipped += 1
+                    if self.project_id and self.run_id:
+                        from core.research.temporary_sources import cache, run_scope
+                        cache.remove(run_scope(self.project_id, self.run_id), result['url'])
                     continue
                 if final:
                     self.seen.add(canonical_source_url(final))
@@ -355,13 +473,23 @@ class DiscoveryFrontier:
         try:
             model = config.effective_embedding_model()
             if eligible and embeddings.backend_is_loaded(model):
-                vectors, _ = embeddings.encode_with_identity(
-                    [self.question] + [item["text"][:4000] for item in eligible],
-                    model_name=model, normalize=True,
+                texts = [item["text"][:4000] for item in eligible]
+                identity = embeddings.embedding_identity(model)
+                reuse = self.query_vector is not None and self.query_identity == identity
+                vectors, served_identity = embeddings.encode_with_identity(
+                    texts if reuse else [self.question] + texts, model_name=model, normalize=True,
                 )
-                if len(vectors) == len(eligible) + 1:
-                    for item, vector in zip(eligible, vectors[1:]):
-                        cosine = sum(float(a) * float(b) for a, b in zip(vectors[0], vector))
+                if reuse and served_identity != self.query_identity:
+                    reuse = False
+                    vectors, served_identity = embeddings.encode_with_identity(
+                        [self.question] + texts, model_name=model, normalize=True)
+                if not reuse and len(vectors) == len(eligible) + 1:
+                    self.query_vector = vectors[0]
+                    self.query_identity = served_identity
+                    vectors = vectors[1:]
+                if self.query_vector is not None and len(vectors) == len(eligible) and self.query_identity == served_identity:
+                    for item, vector in zip(eligible, vectors):
+                        cosine = sum(float(a) * float(b) for a, b in zip(self.query_vector, vector))
                         scores[item["url"]] += max(0, cosine) * max(1, len(keywords))
         except Exception:
             pass

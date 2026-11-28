@@ -86,7 +86,7 @@ export function ResearchSourceImport({ run, onDiscard }: { run: ResearchRun; onD
         </Button>}
       {expanded && <div className="mt-3 space-y-3">
         <p className="text-xs text-muted-foreground">
-          Fetch original accessible source content, not the AI report. Supported PDF, Office, OpenDocument, EPUB and text downloads retain their original bytes. HTML originals are retained where available; some web pages remain text snapshots. Images use loaded vision or local OCR when available and otherwise remain downloadable, not indexed. Added sources use the project's normal embedding and retrieval settings.
+          Keep original accessible source content, not the AI report. Recently acquired originals are reused when still cached. Supported PDF, Office, OpenDocument, EPUB and text downloads retain their original bytes. HTML originals are retained where available; some web pages remain text snapshots. Images use loaded vision or local OCR when available and otherwise remain downloadable, not indexed. Added sources use the project's normal embedding and retrieval settings.
         </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={remaining.length > 0 && count === remaining.length} disabled={busy || !remaining.length}
@@ -104,8 +104,9 @@ export function ResearchSourceImport({ run, onDiscard }: { run: ResearchRun; onD
               <span className="block break-words">{source.title || source.url}</span>
               <span className="block break-all text-xs text-muted-foreground">{source.url}</span>
               {source.verification && <span className="block text-xs text-muted-foreground">
-                {source.format ? source.format + " · " : ""}{source.verification === "verified" || source.verification === "downloaded" ? "Downloaded; not yet indexed" : source.verification === "unreadable" ? "Downloaded; text not verified" : "Inaccessible"}
+                {source.format ? source.format + " · " : ""}{source.verification === "verified" ? "Text extracted; not yet indexed" : source.verification === "downloaded" || source.verification === "unreadable" ? "Original acquired; extraction pending" : "Inaccessible"}
               </span>}
+              {source.snippet && <span className="block text-xs text-muted-foreground line-clamp-3">{source.snippet}</span>}
               {source.error && <span className="block text-xs text-destructive">{source.error}</span>}
               {queued.has(source.url) && <span className="block text-xs text-muted-foreground">
                 {existing.has(source.url) ? "Already retained in this project" : indexed.has(source.url) ? "Indexed in project" : "Submitted to project indexing"}

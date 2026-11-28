@@ -9,6 +9,7 @@ from __future__ import annotations
 from core.training.account_jobs import account_is_retired, account_key, account_path
 from utils.account_context import account_thread, current_account
 import hashlib
+import json
 import logging
 import os
 import queue
@@ -524,12 +525,32 @@ def _run(
         slot.acquire()
         conn = rag_db.get_connection()
         _progress(conn, job_id, "parsing", 0.1)
+        doc = store.get_document(conn, document_id) or {}
+        research_meta = None
+        if doc.get("source_metadata"):
+            try:
+                value = json.loads(doc["source_metadata"])
+                if isinstance(value, dict):
+                    research_meta = value
+            except (TypeError, ValueError):
+                pass
+        visual_warnings = []
+        extraction = "text"
         from .research_source_import import IMAGE_EXTS
         if os.path.splitext(stored_path)[1].lower() in IMAGE_EXTS:
             from .source_image import image_pages
             pages = image_pages(stored_path)
+            extraction = "ocr-only" if any("Local OCR transcription" in page.text for page in pages) else "vision"
         else:
             pages = parsers.parse(stored_path)
+            if research_meta is not None and stored_path.lower().endswith((".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".pptm", ".odt", ".ods", ".odp")):
+                from .source_image import embedded_visual_pages
+                extra, warning = embedded_visual_pages(stored_path)
+                pages.extend(extra)
+                if extra:
+                    extraction = "text-plus-visual"
+                if warning:
+                    visual_warnings.append(warning)
         is_pdf = stored_path.lower().endswith(".pdf")
         scanned_pages = {p.page_number for p in pages if p.needs_ocr}
         ocred: set[int] = set()
@@ -590,7 +611,13 @@ def _run(
                 pages = captioner.splice_captions(pages, captions)
                 ocred.update(complete_captions)
 
-        if scanned_pages - ocred:
+        if is_pdf and ocred:
+            extraction = "text-plus-ocr-or-vision"
+        if research_meta is not None and is_pdf and caption_on and captioner.vision_endpoint() is None:
+            visual_warnings.append("No loaded vision model: PDF figures and charts were not visually interpreted; local OCR may supply scanned text.")
+        if scanned_pages - ocred and research_meta is not None and any((page.text or "").strip() for page in pages):
+            visual_warnings.append(str(pdf_ocr.unreadable_pages_error(scanned_pages - ocred)))
+        elif scanned_pages - ocred:
             if _abort_if_document_deleted(conn, job_id, document_id):
                 return
             if not job_leases.renew_owned(conn, job_leases.INGESTION, job_id):
@@ -651,6 +678,11 @@ def _run(
         # add_chunks committed and released the lock, so re-check for a delete in that gap.
         if _abort_if_document_deleted(conn, job_id, document_id):
             return
+        if research_meta is not None:
+            research_meta["extraction"] = extraction
+            research_meta["extractionWarning"] = " ".join(visual_warnings)
+            conn.execute("UPDATE documents SET source_metadata=? WHERE id=?",
+                         (json.dumps(research_meta, ensure_ascii=False), document_id))
         store.set_document_status(conn, document_id, "completed", num_chunks = len(chunks))
         _replace_old_document(conn, replaces, stored_path, document_id)
 

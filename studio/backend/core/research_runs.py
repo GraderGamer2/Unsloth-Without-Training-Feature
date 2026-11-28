@@ -1564,8 +1564,13 @@ class ResearchSupervisor:
         self.note_server_address(getattr(request, "scope", {}).get("server"))
 
     async def _loop(self) -> None:
+        from core.research.temporary_sources import cache
+        last_prune = 0.0
         while not self._stopping.is_set():
             try:
+                if time.monotonic() - last_prune >= 60:
+                    await asyncio.to_thread(cache.prune)
+                    last_prune = time.monotonic()
                 if self._server_port() is None:
                     await asyncio.sleep(self.poll_seconds)
                     continue
@@ -2556,7 +2561,7 @@ class ResearchSupervisor:
             str(run["config"].get("question") or ""),
         )
         from core.research.discovery import DiscoveryFrontier, complementary_search, research_search
-        frontier = await asyncio.to_thread(DiscoveryFrontier, question, run.get("projectId"), exhaustive, max_sources)
+        frontier = await asyncio.to_thread(DiscoveryFrontier, question, run.get("projectId"), exhaustive, max_sources, run["id"])
         question_urls = [
             url
             for url in dict.fromkeys(
@@ -2990,11 +2995,16 @@ class ResearchSupervisor:
                     self._cancel_event(run["id"]), tool_timeout,
                 )
                 await self._check_active(run["id"])
+                frontier.record_batch(action["action"], found_sources)
                 # Evidence/status live in the source records, not a narrative report.
                 result = "\n\n".join(f"Title: {item['title']}\nURL: {item['url']}\nSnippet: {item.get('snippet', '')}"
                                      for item in found_sources)
             if not source_only and run["config"].get("depth"):
                 frontier.observe(found_sources)
+                if action["action"] == "fetch" and not _research_step_failed(result, []):
+                    linked = re.findall(r'https?://[^\s<>\]\)"\']+', result)
+                    frontier.observe([{"url": url, "title": url, "snippet": "Link found in fetched source"}
+                                      for url in dict.fromkeys(linked) if check_url_access(url, website_policy)[0]][:max_sources])
             for source in found_sources:
                 if len(sources) >= max_sources:
                     break
@@ -3018,7 +3028,7 @@ class ResearchSupervisor:
                     source["title"],
                     source["snippet"],
                     self.worker_id,
-                    metadata = {key: source[key] for key in ("verification", "format", "sha256", "contentSha256", "sourceUrl", "finalUrl", "error") if key in source} or None,
+                    metadata = {key: source[key] for key in ("verification", "format", "sha256", "contentSha256", "sourceUrl", "finalUrl", "error", "cached") if key in source} or None,
                 )
                 await self._check_worker_write(run["id"], written)
             tool_failed = is_tool_error(result)
@@ -3069,6 +3079,7 @@ class ResearchSupervisor:
                 "input": argument,
                 "sourceCount": len(step_sources) + len(rag_sources),
                 "sourceUrls": [source["url"] for source in step_sources],
+                **({"coverage": frontier.summary()} if source_only else {}),
                 "evidenceSources": rag_sources,
                 **(
                     {"excerpt": clean_result[:12000]}
@@ -3499,6 +3510,8 @@ class ResearchSupervisor:
 
 def retire_account_research(account) -> None:
     """Cancel this account's in-flight generation without stopping the supervisor."""
+    from core.research.temporary_sources import cache
+    cache.discard((account.account_id,))
     for supervisor in tuple(_supervisors):
         for key, event in list(supervisor._cancel_events.items()):
             if (isinstance(key, str) and account.is_owner) or (

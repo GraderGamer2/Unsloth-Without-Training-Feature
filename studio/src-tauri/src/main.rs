@@ -2638,6 +2638,7 @@ fn main() {
             native_file_dialogs::pick_native_download_directory,
             native_file_dialogs::save_native_file_in_directory,
             native_file_dialogs::release_native_download_directory,
+            native_file_dialogs::open_native_export_directory,
             native_file_dialogs::save_native_source_manifest,
             native_file_dialogs::download_logs_to_downloads,
             native_file_dialogs::pick_native_chat_import,

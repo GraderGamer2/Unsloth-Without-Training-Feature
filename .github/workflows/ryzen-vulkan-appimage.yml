@@ -407,6 +407,8 @@ jobs:
           python3 -m py_compile studio/backend/core/inference/llama_cpp.py studio/backend/core/inference/offload_layout.py studio/backend/core/rag/chunking.py studio/backend/core/inference/context_window.py studio/backend/core/inference/studio_tool_loop.py studio/backend/core/inference/llama_tool_schema.py studio/backend/core/rag/store.py studio/backend/core/rag/embed_connection.py studio/backend/core/research_runs.py
           python3 studio/backend/tests/test_personal_backend_fastpaths.py
           python3 studio/backend/tests/test_project_source_scope.py
+          python3 studio/backend/tests/test_research_candidate_cache.py
+          python3 -m py_compile studio/backend/core/research/temporary_sources.py studio/backend/core/research/academic_providers.py studio/backend/core/research/discovery.py studio/backend/core/rag/ingestion.py studio/backend/core/rag/pdf_ocr.py
           python3 -m py_compile studio/backend/core/research/discovery.py studio/backend/core/rag/source_image.py studio/backend/storage/research_project_scope.py studio/backend/storage/research_runs_db.py studio/backend/storage/studio_db.py studio/backend/routes/research_runs.py studio/backend/routes/rag.py studio/backend/core/rag/research_source_import.py
           python3 studio/src-tauri/linux/test-personal-llama-vulkan.py
           python3 studio/src-tauri/linux/test-personal-runtime.py
@@ -465,6 +467,8 @@ jobs:
                   "studio/backend/routes/rag.py",
                   "studio/backend/core/rag/research_source_import.py",
                   "studio/backend/core/research/discovery.py",
+                  "studio/backend/core/research/temporary_sources.py",
+                  "studio/backend/core/research/academic_providers.py",
                   "studio/backend/core/rag/source_image.py",
                   "studio/backend/storage/research_project_scope.py",
                   "studio/backend/storage/research_runs_db.py",

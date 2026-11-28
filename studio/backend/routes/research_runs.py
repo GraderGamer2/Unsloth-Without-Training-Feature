@@ -633,6 +633,8 @@ def discard_project_research_run(
         db.discard_project_run(run_id, current_subject)
     except db.ResearchConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    from core.research.temporary_sources import cache, run_scope
+    cache.discard(run_scope(project_id, run_id))
     return {"discarded": True}
 
 

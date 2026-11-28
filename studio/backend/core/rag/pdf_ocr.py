@@ -71,13 +71,14 @@ def ocr_pages(
 
 
 @mupdf_serialized
-def ocr_image_blocks(path: str) -> tuple[str, list[dict]]:
+def ocr_image_blocks(path: str | bytes) -> tuple[str, list[dict]]:
     """A one-page image's text as ``ocr_pages`` reads it, and its text blocks with ``box``
     ``[x0, y0, x1, y1]`` as fractions of the page."""
     import pymupdf
 
     try:
-        with pymupdf.open(path) as doc:
+        source = pymupdf.open(stream=path, filetype="png") if isinstance(path, bytes) else pymupdf.open(path)
+        with source as doc:
             page = doc[0]
             textpage = _ocr_textpage(page)
             text = page.get_text("text", textpage = textpage).strip()

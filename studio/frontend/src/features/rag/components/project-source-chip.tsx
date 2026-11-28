@@ -17,6 +17,7 @@ export function ProjectSourceChip({
 }) {
   const ready = doc.status === "completed" && !doc.id.startsWith("pending_");
   return (
+    <div className="min-w-0">
     <DocumentStatusChip
       filename={doc.filename}
       status={doc.status}
@@ -35,5 +36,8 @@ export function ProjectSourceChip({
           : undefined
       }
     />
+    {doc.researchSource && doc.extraction && <p className="text-xs text-muted-foreground">{doc.extraction === "ocr-only" ? "OCR only" : doc.extraction === "vision" ? "Vision description" : doc.extraction === "text" ? "Text indexed" : "Text and available visual extraction"}</p>}
+    {doc.extractionWarning && <p className="text-xs text-muted-foreground" title={doc.extractionWarning}>{doc.extractionWarning}</p>}
+    </div>
   );
 }

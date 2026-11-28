@@ -45,6 +45,7 @@ export interface ResearchStepResult {
   input?: string;
   sourceCount?: number;
   sourceUrls?: string[];
+  coverage?: { downloaded: number; skippedExisting: number; distinctDomains: number; uncoveredTerms: string[]; stopReason?: string };
   evidenceSources?: ResearchEvidenceSource[];
   excerpt?: string;
   error?: string;
@@ -70,6 +71,7 @@ export interface ResearchSource {
   fetchedAt?: number;
   verification?: "downloaded" | "verified" | "unreadable" | "inaccessible";
   format?: string;
+  cached?: boolean;
   error?: string;
 }
 

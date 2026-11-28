@@ -118,6 +118,7 @@ export function ProjectSourceResearch({projectId}: {projectId: string}) {
     finally { requestBusy.current = false; if (live.current) setBusy(false); }
   }
   const running = run && !settled(run);
+  const coverage = run?.steps.slice().reverse().find(step => step.result?.coverage)?.result?.coverage;
   return <div className="mb-4 rounded-2xl border border-border bg-muted/30 p-4">
     <form onSubmit={event => {event.preventDefault(); void start();}}>
       <label htmlFor="project-source-research" className="text-sm font-medium">Find sources</label>
@@ -130,11 +131,12 @@ export function ProjectSourceResearch({projectId}: {projectId: string}) {
         </select>
         <Button type="submit" size="sm" disabled={loading || busy || Boolean(run) || !query.trim()}>{loading ? "Loading…" : busy ? "Starting…" : "Search sources"}</Button>
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">Searches for sources without creating a chat or report. Nothing is permanently added until you select it.</p>
+      <p className="mt-2 text-xs text-muted-foreground">Searches without creating a chat or report. Deep: up to 12 steps / 40 candidates; Exhaustive: up to 30 steps / 100 candidates. Nothing is permanently added until you select it.</p>
     </form>
     {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
     {run && <div className="mt-3 space-y-2">
       <p role="status" className="text-sm">{running ? `${run.status === "planning" ? "Planning search" : run.status === "cancelling" ? "Stopping" : "Discovering sources"} · ${run.sources.length} candidates` : `${run.status === "completed" ? "Search completed" : run.status === "cancelled" ? "Search stopped" : "Search failed"} · ${run.sources.length} candidates`}</p>
+      {coverage && <p className="text-xs text-muted-foreground">{coverage.downloaded} acquired · {coverage.skippedExisting} existing or duplicate skipped · {coverage.distinctDomains} domains{coverage.uncoveredTerms.length ? ` · Unmatched topic terms: ${coverage.uncoveredTerms.join(", ")}` : ""}</p>}
       {running && <Button type="button" size="sm" variant="outline" disabled={run.status === "cancelling"} onClick={() => void stop()}>Stop search</Button>}
       {run.error && <p className="text-xs text-destructive">{run.error}</p>}
       {run.status === "failed" && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void retry()}>Retry search</Button>}

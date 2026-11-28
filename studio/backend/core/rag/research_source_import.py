@@ -243,7 +243,7 @@ def fetch_source_payload(url, title, policy, max_upload_bytes, *,
     if not allowed:
         raise ValueError(reason)
     if skip_url is not None and skip_url(candidate):
-        details["skippedExisting"] = True
+        details.update(skippedExisting=True, finalUrl=candidate)
         raise ValueError("Already retained in this project.")
     # Preserve the existing GitHub README/blob handling for repository pages.
     if _pdf_candidate(url) is None and urlsplit(url).hostname == "github.com":
@@ -257,7 +257,7 @@ def fetch_source_payload(url, title, policy, max_upload_bytes, *,
     meta = {}
     def redirect(target, method, has_body, headers):
         if skip_url is not None and skip_url(target):
-            details["skippedExisting"] = True
+            details.update(skippedExisting=True, finalUrl=target)
             return "Redirect points to a source already retained in this project."
         return None
 

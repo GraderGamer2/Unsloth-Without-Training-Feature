@@ -12,7 +12,8 @@ interface ExportEntry {
   representation?: string;
   sourceUrl?: string | null;
   error?: string;
-}
+  extraction?: string | null;
+  extractionWarning?: string | null;
 
 export function ProjectSourceExport({ projectId, documents }: {
   projectId: string;
@@ -21,6 +22,7 @@ export function ProjectSourceExport({ projectId, documents }: {
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [openFolder, setOpenFolder] = useState(true);
   const [progress, setProgress] = useState("");
   const [results, setResults] = useState<ExportEntry[]>([]);
   const active = useRef(false);
@@ -51,7 +53,7 @@ export function ProjectSourceExport({ projectId, documents }: {
       for (const doc of chosen) {
         if (cancelled.current) break;
         if (active.current) setProgress(`Exporting ${entries.length + 1} of ${chosen.length}: ${doc.filename}`);
-        const entry: ExportEntry = { documentId: doc.id, filename: doc.filename };
+        const entry: ExportEntry = { documentId: doc.id, filename: doc.filename, extraction: doc.extraction, extractionWarning: doc.extractionWarning };
         try {
           const source = await getProjectDocumentExportUrl(projectId, doc.id);
           if (cancelled.current) break;
@@ -81,6 +83,10 @@ export function ProjectSourceExport({ projectId, documents }: {
         }
       }
       if (active.current) setProgress(`${cancelled.current ? "Stopped. " : ""}Exported ${saved} of ${chosen.length} sources; ${failed} failed.`);
+      if (openFolder && saved > 0 && !cancelled.current && active.current) {
+        try { await invoke("open_native_export_directory", { token }); }
+        catch (error) { toast.error("Could not open export folder", {description: String(error)}); }
+      }
     } catch (error) {
       if (active.current) setProgress(String(error));
     } finally {
@@ -115,6 +121,7 @@ export function ProjectSourceExport({ projectId, documents }: {
             <span className="break-all">{doc.filename}</span>
           </label>)}
         </div>
+        <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={openFolder} disabled={busy} onChange={event => setOpenFolder(event.target.checked)} />Open folder after export</label>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" disabled={busy || !chosen.length} onClick={() => void exportFiles()}>Export selected ({chosen.length})</Button>
           {busy && <Button type="button" variant="outline" size="sm" onClick={() => { cancelled.current = true; setProgress("Stopping after current file…"); }}>Stop export</Button>}
