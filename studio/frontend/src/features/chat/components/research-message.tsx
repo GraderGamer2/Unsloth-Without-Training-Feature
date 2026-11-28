@@ -26,6 +26,7 @@ import { researchReplyOwnsRun } from "../utils/research-run-binding";
 import { researchCitation } from "../utils/research-citations";
 import { researchStatusLabel } from "./research-activity-panel";
 import { Tick02Icon } from "@/lib/tick-icon";
+import { ResearchSourceImport } from "@/features/rag/components/research-source-import";
 
 export function ResearchMessage(): ReactElement | null {
   const metadata = useAuiState(
@@ -129,6 +130,7 @@ export function ResearchMessage(): ReactElement | null {
           defer={true}
         />
         <SourcesGroup sources={sources} allowRemoteIcons={false} />
+        {!failed && run.sources.length > 0 && <ResearchSourceImport key={run.id} run={run} />}
         <DocumentSourcesGroup sources={documentSources} />
         <DocumentSourcesGroup sources={mcpSources} label="MCP Sources" />
       </div>

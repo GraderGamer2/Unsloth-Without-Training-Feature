@@ -2120,6 +2120,33 @@ function ProjectLanding({
   const [pendingNewThreadId, setPendingNewThreadId] = useState<string | null>(
     null,
   );
+  const sourceResearchAui = useAui();
+  const projectComposerRef = useRef<HTMLDivElement>(null);
+  function startSourceResearch(question: string): boolean {
+    const composer = sourceResearchAui.composer();
+    const form = projectComposerRef.current?.querySelector<HTMLFormElement>("form.aui-composer-root");
+    const state = composer.getState();
+    if (!active || !runtimeReady || pendingNewThreadId || !form ||
+        sourceResearchAui.thread().getState().isRunning) {
+      toast.error("Wait for the project chat to be ready.");
+      return false;
+    }
+    if (state.text.trim() || state.attachments.length) {
+      toast.info("Send or clear the existing chat draft first.");
+      return false;
+    }
+    const prompt = "/find-sources " + question;
+    composer.setText(prompt);
+    // Use the real composer submit handler: it reserves the run, stamps project
+    // ownership and performs the normal model/attachment/permission checks.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const now = composer.getState();
+      if (!form.isConnected || now.text !== prompt || now.attachments.length ||
+          useChatRuntimeStore.getState().activeProjectId !== projectId) return;
+      form.requestSubmit();
+    }));
+    return true;
+  }
   const [previews, setPreviews] = useState<
     Record<string, { snippet: string; date: string }>
   >({});
@@ -2492,10 +2519,12 @@ function ProjectLanding({
               </NonModalDropdownMenu>
             </div>
 
-            <ProjectComposer
-              disabled={Boolean(pendingNewThreadId)}
-              placeholder={`New chat in ${projectName}`}
-            />
+            <div ref={projectComposerRef}>
+              <ProjectComposer
+                disabled={Boolean(pendingNewThreadId)}
+                placeholder={`New chat in ${projectName}`}
+              />
+            </div>
 
             <div className="mt-9 flex items-center gap-2">
               <button
@@ -2532,7 +2561,7 @@ function ProjectLanding({
                   </div>
                 }
               >
-                <ProjectSourcesPanel projectId={projectId} />
+                <ProjectSourcesPanel key={projectId} projectId={projectId} onResearch={startSourceResearch} />
               </Suspense>
             ) : projectTab === "files" ? (
               <Suspense

@@ -806,5 +806,37 @@ class CacheAndBatchOptimizationTests(unittest.TestCase):
         self.assertEqual(cleaned, ["0", "1", "2", "3", "4"])
 
 
+class ResearchImportTests(unittest.TestCase):
+    def test_recorded_sources_and_stable_snapshot(self):
+        policy = runpy.run_path(str(BACKEND / "core/inference/web_access_policy.py"))
+        module = ModuleType("core.inference.web_access_policy")
+        module.check_url_access = policy["check_url_access"]
+        module.normalize_website_policy = policy["normalize_website_policy"]
+        with patch.dict(sys.modules, {"core.inference.web_access_policy": module}):
+            ns = runpy.run_path(str(BACKEND / "core/rag/research_source_import.py"))
+        run = {"sources": [{"url": "https://example.org/paper#section", "title": "Paper"}],
+               "config": {"websitePolicy": {"allowedDomains": ["example.org"]}}}
+        resolve = ns["resolve_source"]
+        url, title, access = resolve(run, run["sources"][0]["url"],
+                                     {"allowedDomains": ["example.org"]})
+        self.assertEqual(url, "https://example.org/paper")
+        self.assertEqual(title, "Paper")
+        self.assertEqual(access["allowedDomains"], ["example.org"])
+        with self.assertRaises(ValueError):
+            resolve(run, "https://example.org/not-recorded", {})
+        with self.assertRaises(ValueError):
+            resolve(run, run["sources"][0]["url"], {"blockedDomains": ["example.org"]})
+        with self.assertRaises(ValueError):
+            resolve(run, run["sources"][0]["url"], {"allowedDomains": ["other.org"]})
+        snapshot = ns["snapshot"]
+        name, content = snapshot(url, title, "original paper text")
+        self.assertTrue(name.endswith(".md"))
+        self.assertIn(url, content)
+        self.assertIn("original paper text", content)
+        self.assertEqual(snapshot(url, title, "original paper text"), (name, content))
+        with self.assertRaises(ValueError):
+            snapshot(url, title, "   ")
+
+
 if __name__ == "__main__":
     unittest.main()

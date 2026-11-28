@@ -254,6 +254,15 @@ export function uploadProjectDocument(
   );
 }
 
+export function importResearchSource(
+  projectId: string, runId: string, url: string,
+  websitePolicy: { allowedDomains: string[]; blockedDomains: string[] },
+): Promise<DocumentUploadResult> {
+  return ragRequest(`/projects/${encodeURIComponent(projectId)}/research-sources`, {
+    method: "POST", body: { runId, url, websitePolicy },
+  });
+}
+
 const projectSourcesCache = new Map<string, { has: boolean; at: number }>();
 const PROJECT_SOURCES_TTL_MS = 30_000;
 

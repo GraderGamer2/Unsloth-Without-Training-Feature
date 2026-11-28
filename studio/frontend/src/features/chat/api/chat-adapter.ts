@@ -254,6 +254,7 @@ import {
 } from "../tool-call-id";
 
 import { buildResearchInferenceRequest } from "../research-inference-request";
+import { projectSourceResearchQuestion } from "../utils/project-source-research";
 import { customReasoningRequestFields } from "../custom-reasoning";
 import { pickFriendlyContainerName } from "../lib/friendly-names";
 import {
@@ -5439,6 +5440,25 @@ export function createOpenAIStreamAdapter(
         localMarkers: mcpImagesLocalMarkers,
         uncapped: !isExternalRequest && compactingLlamaCppChat(runtime),
       });
+      // Explicit user action in the project Sources panel. Start the existing
+      // durable research run directly, rather than spend a chat turn asking
+      // a small model to decide whether it should invoke Deep Research.
+      const sourceResearchQuestion = projectSourceResearchQuestion(
+        rawMessages, ragProjectId, Boolean(options.pairId),
+      );
+      if (sourceResearchQuestion !== null) {
+        if (browserTemporary) throw new Error("Source research requires a saved project chat.");
+        if (threadAlreadyResearched) throw new Error("Start source research in a new project chat.");
+        if (!supportsTools && !isExternalRequest) {
+          throw new Error("Source research requires a model that supports tools.");
+        }
+        try {
+          yield* startDeepResearch(sourceResearchQuestion, abortSignal);
+        } finally {
+          releaseCurrentPreStreamRun();
+        }
+        return;
+      }
       const replayReasoning = !isExternalRequest || (
         providerSupportsPreserveThinking(externalProvider?.providerType) &&
         runtime.preserveThinking

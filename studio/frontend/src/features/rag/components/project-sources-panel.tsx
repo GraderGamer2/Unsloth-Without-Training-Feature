@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { FolderAddIcon } from "@/lib/folder-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   announceProjectSourcesUpdated,
   invalidateProjectSources,
@@ -38,7 +38,11 @@ import {
 import { useUploadQueue } from "./use-upload-queue";
 import { linkedFolderDocumentsSummary } from "./source-folder-copy";
 
-export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
+export function ProjectSourcesPanel({ projectId, onResearch }: {
+  projectId: string;
+  onResearch?: (question: string) => boolean;
+}) {
+  const [researchQuery, setResearchQuery] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lister = useCallback(
     () => listProjectDocuments(projectId),
@@ -182,6 +186,27 @@ export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
           void handleItems(fileItems(files));
         }}
       />
+      {onResearch && (
+        <form className="mb-4 rounded-2xl border border-border bg-muted/30 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const query = researchQuery.trim();
+            if (query && onResearch(query)) setResearchQuery("");
+          }}>
+          <label htmlFor="project-source-research" className="text-sm font-medium">Find sources</label>
+          <textarea id="project-source-research" rows={2} maxLength={1600}
+            value={researchQuery} onChange={(event) => setResearchQuery(event.target.value)}
+            placeholder="What would you like to research?"
+            className="mt-2 w-full resize-y rounded-xl bg-background p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Web · Deep Research</span>
+            <Button type="submit" size="sm" disabled={!researchQuery.trim()}>Search sources</Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Uses your selected AI model. Review the research plan, then choose websites and readable online documents to add to this project.
+          </p>
+        </form>
+      )}
       <div className="mb-4 rounded-2xl bg-muted/30 px-5 py-4">
         <LinkedFoldersManager
           scope={{ type: "project", id: projectId }}

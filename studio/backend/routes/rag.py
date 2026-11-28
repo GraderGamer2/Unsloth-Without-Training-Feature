@@ -661,6 +661,77 @@ def upload_project_document(
     return {"documentId": document_id, "jobId": job_id, "filename": filename}
 
 
+class ResearchSourceImport(BaseModel):
+    runId: str = Field(min_length = 1, max_length = 128)
+    url: str = Field(min_length = 1, max_length = 4096)
+    websitePolicy: dict | None = None
+
+
+@router.post("/projects/{project_id}/research-sources")
+def import_research_source(
+    project_id: str, payload: ResearchSourceImport,
+    subject: str = Depends(get_current_subject),
+) -> dict:
+    """Import a recorded source from a completed research run into its own project."""
+    from io import BytesIO
+    from core.rag import research_source_import
+    from state.tool_policy import get_tool_policy
+    from storage import research_runs_db
+    from storage.studio_db import get_chat_project, get_chat_thread
+
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    if get_tool_policy() is False:
+        raise HTTPException(status_code = 403, detail = "Tools are disabled on this server")
+    scope = store.project_scope(project_id)
+    _raise_if_scope_retired(scope, "Project is being deleted")
+    run = research_runs_db.get_run(payload.runId)
+    thread = get_chat_thread(run["threadId"]) if run else None
+    if not thread or thread.get("projectId") != project_id:
+        raise HTTPException(status_code = 404, detail = "Research run not found in this project")
+    if run["status"] != "completed":
+        raise HTTPException(status_code = 409, detail = "Research must complete before importing sources")
+    try:
+        url, title, policy = research_source_import.resolve_source(run, payload.url, payload.websitePolicy)
+    except ValueError as exc:
+        raise HTTPException(status_code = 422, detail = str(exc)) from exc
+    if not research_source_import.FETCH_SLOTS.acquire(blocking = False):
+        raise HTTPException(status_code = 429, detail = "Source importer is busy. Retry this source shortly.")
+    try:
+        try:
+            body = research_source_import.fetch_source_text(url, policy)
+            filename, markdown = research_source_import.snapshot(url, title, body)
+        except ValueError as exc:
+            raise HTTPException(status_code = 422, detail = str(exc)) from exc
+        stored_path, filename, content_hash = _persist_upload_stream(
+            BytesIO(markdown.encode("utf-8")), _document_label(filename),
+            empty_detail = "No readable source content.",
+        )
+        try:
+            with folder_sync.scope_lock(scope):
+                _require_scope_owner("project", project_id)
+                _raise_if_scope_retired(scope, "Project is being deleted")
+                current = get_chat_thread(run["threadId"])
+                if not current or current.get("projectId") != project_id:
+                    raise HTTPException(status_code = 409, detail = "Research chat moved or was deleted")
+                with _rag_unavailable_as_503(stored_path):
+                    document_id, job_id = ingestion.start_ingestion(
+                        scope, None, None, filename, stored_path,
+                        project_id = project_id, ocr = False, caption = False,
+                        content_hash = content_hash,
+                        stage_slots = research_source_import.INDEX_SLOTS,
+                    )
+        except Exception:
+            _remove_stored_upload(stored_path)
+            raise
+        if get_chat_project(project_id) is None:
+            _discard_document(document_id)
+            raise HTTPException(status_code = 404, detail = "Project not found")
+        return {"documentId": document_id, "jobId": job_id, "filename": filename}
+    finally:
+        research_source_import.FETCH_SLOTS.release()
+
+
 @router.get("/projects/{project_id}/documents")
 def list_project_documents(project_id: str, subject: str = Depends(get_current_subject)) -> dict:
     _require_rag()

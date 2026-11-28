@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
+import { projectSourceResearchQuestion } from "../src/features/chat/utils/project-source-research.ts";
+
+test("source search is explicit, project scoped, and only the latest user message", () => {
+  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+  const prompt = user("/find-sources research about Vulkan");
+  assert.match(projectSourceResearchQuestion([prompt], "p", false) ?? "", /research about Vulkan/);
+  assert.equal(projectSourceResearchQuestion([prompt], null, false), null);
+  assert.equal(projectSourceResearchQuestion([prompt], "p", true), null);
+  assert.equal(projectSourceResearchQuestion([prompt, user("normal chat")], "p", false), null);
+  assert.equal(projectSourceResearchQuestion([{ ...prompt, role: "assistant" }], "p", false), null);
+  assert.equal(projectSourceResearchQuestion([{ ...prompt, attachments: [{}] }], "p", false), null);
+  assert.equal(projectSourceResearchQuestion([user("/find-sources   ")], "p", false), null);
+});
 import { fileImportSource, readAllText } from "../src/features/chat/utils/json-record-stream.ts";
 import { startVisibilityPoll } from "../src/features/hub/download-manager/visibility-poll.ts";
 
