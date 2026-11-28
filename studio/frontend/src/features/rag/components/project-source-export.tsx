@@ -14,6 +14,7 @@ interface ExportEntry {
   error?: string;
   extraction?: string | null;
   extractionWarning?: string | null;
+}
 
 export function ProjectSourceExport({ projectId, documents }: {
   projectId: string;
