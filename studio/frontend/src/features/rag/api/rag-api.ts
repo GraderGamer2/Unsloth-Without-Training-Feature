@@ -257,8 +257,16 @@ export function uploadProjectDocument(
 export function importResearchSource(
   projectId: string, runId: string, url: string,
   websitePolicy: { allowedDomains: string[]; blockedDomains: string[] },
-): Promise<DocumentUploadResult> {
-  return ragRequest<DocumentUploadResult>(`/projects/${encodeURIComponent(projectId)}/research-sources`, {
+): Promise<Omit<DocumentUploadResult, "jobId"> & {
+  jobId: string | null;
+  existing?: boolean;
+  status?: RagDocument["status"];
+}> {
+  return ragRequest<Omit<DocumentUploadResult, "jobId"> & {
+    jobId: string | null;
+    existing?: boolean;
+    status?: RagDocument["status"];
+  }>(`/projects/${encodeURIComponent(projectId)}/research-sources`, {
     method: "POST", body: { runId, url, websitePolicy },
   }).catch((error: unknown) => {
     if ((error as { status?: number } | null)?.status === 405) {
@@ -798,6 +806,15 @@ export function streamFolderSyncJobEvents(
     signal,
     SSE_STALL_MS,
   );
+}
+
+export async function getProjectDocumentExportUrl(projectId: string, documentId: string): Promise<{
+  url: string; filename: string; representation: string; sourceUrl: string | null;
+}> {
+  const data = await ragRequest<{
+    url: string; filename: string; representation: string; sourceUrl: string | null;
+  }>(`/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/export-url`);
+  return { ...data, url: apiUrl(data.url) };
 }
 
 // Signed URL (no bearer) so pdf.js can issue Range requests. Absolute because consumers bypass

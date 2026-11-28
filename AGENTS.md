@@ -10,7 +10,7 @@
 
 ## Current release gate
 
-The owner is testing the source-discovery build based on commit 5cd4570. Do not start implementation of the expanded research pipeline or trigger a new application build until the owner confirms testing is finished and authorizes development to continue. Bug reports and explicit instructions to fix bugs supersede this gate for the requested fixes. Roadmap-only updates and read-only investigations are allowed.
+The owner tested the source-discovery build based on commit 5cd4570 and explicitly authorized continuation. Follow the current roadmap and resolve reported regressions first. Do not trigger intermediate AppImage builds; validate the consolidated batch before one workflow. Keep implemented, CI-tested and owner-runtime-confirmed states distinct.
 
 ## Engineering requirements
 

@@ -2084,6 +2084,7 @@ function ProjectLanding({
   rotateNewThreadNonce,
   dataLoaded,
   runtimeReady,
+  sourceRuntimeReady,
 }: {
   projectId: string;
   projectName: string;
@@ -2093,6 +2094,7 @@ function ProjectLanding({
   dataLoaded: boolean;
   // The provider is hoisted above the view switch, so its owner reports reload readiness down.
   runtimeReady: boolean;
+  sourceRuntimeReady: boolean;
 }): ReactElement {
   const signalReady = useAppShellReadySignal();
   const navigate = useNavigate();
@@ -2122,11 +2124,12 @@ function ProjectLanding({
   );
   const sourceResearchAui = useAui();
   const projectComposerRef = useRef<HTMLDivElement>(null);
-  function startSourceResearch(question: string): boolean {
+  async function startSourceResearch(question: string): Promise<boolean> {
     const composer = sourceResearchAui.composer();
     const form = projectComposerRef.current?.querySelector<HTMLFormElement>("form.aui-composer-root");
     const state = composer.getState();
-    if (!active || !runtimeReady || pendingNewThreadId || !form ||
+    if (!active || !sourceRuntimeReady || pendingNewThreadId || !form ||
+        useChatRuntimeStore.getState().activeProjectId !== projectId ||
         sourceResearchAui.thread().getState().isRunning) {
       toast.error("Wait for the project chat to be ready.");
       return false;
@@ -2139,13 +2142,20 @@ function ProjectLanding({
     composer.setText(prompt);
     // Use the real composer submit handler: it reserves the run, stamps project
     // ownership and performs the normal model/attachment/permission checks.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const now = composer.getState();
-      if (!form.isConnected || now.text !== prompt || now.attachments.length ||
-          useChatRuntimeStore.getState().activeProjectId !== projectId) return;
-      form.requestSubmit();
-    }));
-    return true;
+    return new Promise<boolean>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const now = composer.getState();
+        if (!form.isConnected || now.text !== prompt || now.attachments.length ||
+            sourceResearchAui.thread().getState().isRunning ||
+            useChatRuntimeStore.getState().activeProjectId !== projectId) {
+          // Preserve the Sources query when a navigation or draft change interrupts submission.
+          resolve(false);
+          return;
+        }
+        form.requestSubmit();
+        resolve(true);
+      }));
+    });
   }
   const [previews, setPreviews] = useState<
     Record<string, { snippet: string; date: string }>
@@ -2562,7 +2572,7 @@ function ProjectLanding({
                 }
               >
                 <ProjectSourcesPanel key={projectId} projectId={projectId}
-                  onResearch={startSourceResearch} researchReady={active && runtimeReady && !pendingNewThreadId} />
+                  onResearch={startSourceResearch} researchReady={active && sourceRuntimeReady && !pendingNewThreadId} />
               </Suspense>
             ) : projectTab === "files" ? (
               <Suspense
@@ -3770,6 +3780,15 @@ export function ChatPage({
   }, [projectLandingId]);
   const projectRuntimeReady =
     projectLandingId !== null && projectRuntimeReadyFor === projectLandingId;
+  // A fresh draft can become usable without loading saved history. Track the
+  // actual successful new-thread switch, scoped to the project and draft nonce.
+  const [sourceReadyFor, setSourceReadyFor] = useState<{ projectId: string; nonce: string } | null>(null);
+  const markProjectSourceReady = useCallback((nonce: string) => {
+    if (projectLandingId !== null) setSourceReadyFor({ projectId: projectLandingId, nonce });
+  }, [projectLandingId]);
+  const projectSourceReady =
+    projectLandingId !== null && sourceReadyFor?.projectId === projectLandingId &&
+    sourceReadyFor.nonce === projectNewThreadNonce;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new view is the reset
   useEffect(() => {
@@ -5301,6 +5320,7 @@ export function ChatPage({
                     ? markProjectRuntimeReady
                     : undefined
                 }
+                onNewThreadReady={baseView.mode === "project" ? markProjectSourceReady : undefined}
                 onCompactionCountChange={handleCompactionCountChange}
               >
                 <NativeAttachmentDragContext.Provider
@@ -5322,6 +5342,7 @@ export function ChatPage({
                           rotateNewThreadNonce={rotateProjectNewThreadNonce}
                           dataLoaded={currentProjectItemsLoaded && !projectsLoading}
                           runtimeReady={projectRuntimeReady}
+                          sourceRuntimeReady={projectSourceReady}
                         />
                       ) : (
                         <>

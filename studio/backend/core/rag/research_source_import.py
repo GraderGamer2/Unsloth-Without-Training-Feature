@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from urllib.parse import urldefrag, urlsplit
+from urllib.parse import unquote_plus, urldefrag, urlsplit, urlunsplit
 
 from core.inference.web_access_policy import check_url_access, normalize_website_policy
 
@@ -124,9 +124,48 @@ def fetch_source_text(url, policy):
     return result
 
 
+# Only remove explicitly recognized tracking parameters; preserve signed URLs and
+# all other raw query components (including order and encoding).
+_TRACKING_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igshid"}
+
+
+def canonical_source_url(url):
+    parts = urlsplit(urldefrag(url)[0])
+    query = []
+    for field in parts.query.split("&") if parts.query else []:
+        key = unquote_plus(field.partition("=")[0]).casefold()
+        if key.startswith("utm_") or key in _TRACKING_KEYS:
+            continue
+        query.append(field)
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", "&".join(query), ""))
+
+
+def source_url_key(url):
+    return hashlib.sha256(canonical_source_url(url).encode("utf-8")).hexdigest()[:10]
+
+
+def retained_source(documents, url):
+    # Existing imports encode a URL hash in the filename. Keep compatibility
+    # with legacy exact URLs and arXiv abstract/PDF aliases.
+    urls = [url, urldefrag(url)[0], canonical_source_url(url)]
+    candidate = _pdf_candidate(url)
+    if candidate:
+        urls.extend([candidate, canonical_source_url(candidate)])
+    parts = urlsplit(url)
+    if parts.hostname == "arxiv.org" and candidate:
+        identifier = urlsplit(candidate).path.rsplit("/", 1)[-1]
+        urls.append("https://arxiv.org/abs/" + identifier)
+    keys = {hashlib.sha256(value.encode("utf-8")).hexdigest()[:10] for value in urls}
+    for doc in documents:
+        match = re.search(r"\[web-([0-9a-f]{10})\]\.[^.]+$", doc.get("filename", ""))
+        if match and match.group(1) in keys and doc.get("status") in {"completed", "pending", "running"}:
+            return doc
+    return None
+
+
 def _source_filename(url, title, extension):
     title = " ".join(title.split())[:120] or urlsplit(url).netloc
-    suffix = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
+    suffix = source_url_key(url)
     return f"{title} [web-{suffix}]{extension}"
 
 

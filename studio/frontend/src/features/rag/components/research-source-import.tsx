@@ -14,6 +14,7 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(sources.map(s => s.url)));
   const [queued, setQueued] = useState<Set<string>>(new Set());
   const [indexed, setIndexed] = useState<Set<string>>(new Set());
+  const [existing, setExisting] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const active = useRef(false);
@@ -47,6 +48,10 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
           if (active.current) {
             setQueued(prev => new Set(prev).add(source.url));
             setErrors(prev => { const next = { ...prev }; delete next[source.url]; return next; });
+          }
+          if (result.existing || !result.jobId) {
+            if (active.current) setExisting(prev => new Set(prev).add(source.url));
+            continue;
           }
           void watchIngestion(target, result.jobId, result.filename || source.title).then(job => {
             if (!active.current || !job) return;
@@ -94,7 +99,7 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
               <span className="block break-words">{source.title || source.url}</span>
               <span className="block break-all text-xs text-muted-foreground">{source.url}</span>
               {queued.has(source.url) && <span className="block text-xs text-muted-foreground">
-                {indexed.has(source.url) ? "Indexed in project" : "Submitted to project indexing"}
+                {existing.has(source.url) ? "Already retained in this project" : indexed.has(source.url) ? "Indexed in project" : "Submitted to project indexing"}
               </span>}
               {errors[source.url] && <span role="alert" className="block text-xs text-destructive">{errors[source.url]}</span>}
             </span>

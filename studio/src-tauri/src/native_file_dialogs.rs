@@ -790,6 +790,30 @@ pub async fn save_native_file_in_directory(
     Ok(name)
 }
 
+/// Write a small provenance manifest to the same user-selected export directory.
+/// The destination name is fixed and publishing never overwrites existing files.
+#[tauri::command]
+pub fn save_native_source_manifest(
+    webview: tauri::Webview,
+    registry: State<'_, NativeSaveRegistry>,
+    token: String,
+    manifest: String,
+) -> Result<String, String> {
+    crate::native_intents::ensure_main_window(&webview)?;
+    let directory = registry.resolve_directory(&token)?;
+    if manifest.len() > 16 * 1024 * 1024 {
+        return Err("Source export manifest is too large.".into());
+    }
+    let _: serde_json::Value = serde_json::from_str(&manifest)
+        .map_err(|_| "Invalid source export manifest.".to_string())?;
+    let destination = unique_destination(&directory, "unsloth-sources.json")?;
+    let mut temporary = staged_temp_file(&destination)?;
+    temporary.write_all(manifest.as_bytes()).map_err(|e| e.to_string())?;
+    temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+    temporary.persist_noclobber(&destination).map_err(|e| e.error.to_string())?;
+    Ok(saved_file_name(&destination))
+}
+
 #[tauri::command]
 pub fn release_native_download_directory(
     webview: tauri::Webview,

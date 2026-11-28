@@ -695,6 +695,20 @@ def import_research_source(
         url, title, policy = research_source_import.resolve_source(run, payload.url, payload.websitePolicy)
     except ValueError as exc:
         raise HTTPException(status_code = 422, detail = str(exc)) from exc
+    def retained():
+        conn = _rag_connection()
+        try:
+            return research_source_import.retained_source(store.list_documents(conn, scope), url)
+        finally:
+            conn.close()
+
+    def already_retained(doc):
+        return {"documentId": doc["id"], "jobId": None, "filename": doc["filename"],
+                "existing": True, "status": doc["status"]}
+
+    existing = retained()
+    if existing is not None:
+        return already_retained(existing)
     if not research_source_import.FETCH_SLOTS.acquire(blocking = False):
         raise HTTPException(status_code = 429, detail = "Source importer is busy. Retry this source shortly.")
     try:
@@ -715,6 +729,23 @@ def import_research_source(
                 current = get_chat_thread(run["threadId"])
                 if not current or current.get("projectId") != project_id:
                     raise HTTPException(status_code = 409, detail = "Research chat moved or was deleted")
+                # A concurrent import may have completed while this request fetched.
+                existing = retained()
+                if existing is not None:
+                    _remove_stored_upload(stored_path)
+                    return already_retained(existing)
+                # Compare exact bytes within the current project before invoking
+                # ingestion (which also has transactional content-hash deduplication).
+                conn = _rag_connection()
+                try:
+                    existing = next((doc for doc in store.list_documents(conn, scope)
+                                     if doc.get("sha256") == content_hash
+                                     and doc.get("status") in {"completed", "pending", "running"}), None)
+                finally:
+                    conn.close()
+                if existing is not None:
+                    _remove_stored_upload(stored_path)
+                    return already_retained(existing)
                 with _rag_unavailable_as_503(stored_path):
                     document_id, job_id = ingestion.start_ingestion(
                         scope, None, None, filename, stored_path,
@@ -732,6 +763,46 @@ def import_research_source(
         return {"documentId": document_id, "jobId": job_id, "filename": filename}
     finally:
         research_source_import.FETCH_SLOTS.release()
+
+
+@router.get("/projects/{project_id}/documents/{document_id}/export-url")
+def project_document_export_url(
+    project_id: str, document_id: str,
+    subject: str = Depends(get_current_subject),
+    no_credential: Annotated[bool, Depends(request_admitted_without_credential)] = False,
+) -> dict:
+    """Export retained originals via the existing signed-file endpoint, not arbitrary paths."""
+    if no_credential:
+        raise HTTPException(status_code = 403, detail = "Export requires a signed-in session")
+    _require_rag()
+    _require_scope_owner("project", project_id)
+    conn = _rag_connection()
+    try:
+        doc = store.get_visible_document(conn, document_id)
+        if not doc or doc.get("scope") != store.project_scope(project_id):
+            raise HTTPException(status_code = 404, detail = "Source not found in this project")
+        _require_document_owner(conn, doc)
+        path = doc.get("stored_path")
+        if not path or not os.path.isfile(path) or not _is_managed_preview_path(path):
+            raise HTTPException(status_code = 404, detail = "Stored source file is unavailable")
+        filename = doc["filename"]
+        representation = "stored file"
+        source_url = None
+        if re.search(r"\[web-[0-9a-f]{10}\]\.md$", filename):
+            # Legacy research snapshots carry the original URL in their first line.
+            representation = "web text snapshot"
+            try:
+                with open(path, "r", encoding = "utf-8") as source:
+                    first = source.readline(8192).strip()
+                if first.startswith("Original URL: "):
+                    source_url = first[len("Original URL: "):]
+            except (OSError, UnicodeError):
+                pass
+    finally:
+        conn.close()
+    token = _sign_document(document_id)
+    return {"url": f"/api/rag/documents/{document_id}/file-signed?token={token}",
+            "filename": filename, "representation": representation, "sourceUrl": source_url}
 
 
 @router.get("/projects/{project_id}/documents")

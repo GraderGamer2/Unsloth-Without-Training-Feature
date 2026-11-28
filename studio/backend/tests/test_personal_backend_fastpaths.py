@@ -828,6 +828,20 @@ class ResearchImportTests(unittest.TestCase):
             resolve(run, run["sources"][0]["url"], {"blockedDomains": ["example.org"]})
         with self.assertRaises(ValueError):
             resolve(run, run["sources"][0]["url"], {"allowedDomains": ["other.org"]})
+        canonical = ns["canonical_source_url"]
+        self.assertEqual(canonical("https://EXAMPLE.org/paper?x=1&utm_source=a&gclid=b#ref"),
+                         "https://example.org/paper?x=1")
+        self.assertEqual(canonical("https://example.org/paper?token=a%2Bb&x=2&x=1"),
+                         "https://example.org/paper?token=a%2Bb&x=2&x=1")
+        retained = ns["retained_source"]
+        existing = {"id": "one", "filename": ns["_source_filename"](url, "Other title", ".md"),
+                    "status": "running"}
+        self.assertEqual(retained([existing], url + "?utm_campaign=test"), existing)
+        self.assertIsNone(retained([{**existing, "status": "failed"}], url))
+        self.assertIsNone(retained([existing], url + "?different=1"))
+        arxiv = {"id": "paper", "filename": ns["_source_filename"](
+            "https://arxiv.org/abs/2506.15672v2", "Paper", ".pdf"), "status": "completed"}
+        self.assertEqual(retained([arxiv], "https://arxiv.org/pdf/2506.15672v2"), arxiv)
         snapshot = ns["snapshot"]
         name, content = snapshot(url, title, "original paper text")
         self.assertTrue(name.endswith(".md"))

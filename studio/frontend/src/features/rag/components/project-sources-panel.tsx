@@ -25,6 +25,7 @@ import {
 } from "./linked-folder-groups";
 import { LinkedFoldersManager } from "./linked-folders-manager";
 import { ProjectSourceChip } from "./project-source-chip";
+import { ProjectSourceExport } from "./project-source-export";
 import {
   RAG_SOURCE_UPLOAD_ACCEPT,
   SUPPORTED_SOURCES_HINT,
@@ -40,10 +41,12 @@ import { linkedFolderDocumentsSummary } from "./source-folder-copy";
 
 export function ProjectSourcesPanel({ projectId, onResearch, researchReady = true }: {
   projectId: string;
-  onResearch?: (question: string) => boolean;
+  onResearch?: (question: string) => boolean | Promise<boolean>;
   researchReady?: boolean;
 }) {
   const [researchQuery, setResearchQuery] = useState("");
+  const [submittingResearch, setSubmittingResearch] = useState(false);
+  const researchSubmission = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lister = useCallback(
     () => listProjectDocuments(projectId),
@@ -192,7 +195,15 @@ export function ProjectSourcesPanel({ projectId, onResearch, researchReady = tru
           onSubmit={(event) => {
             event.preventDefault();
             const query = researchQuery.trim();
-            if (researchReady && query && onResearch(query)) setResearchQuery("");
+            if (!researchReady || !query || researchSubmission.current) return;
+            researchSubmission.current = true;
+            setSubmittingResearch(true);
+            void Promise.resolve().then(() => onResearch(query)).then((submitted) => {
+              if (submitted) setResearchQuery(current => current.trim() === query ? "" : current);
+            }).catch(error => toast.error("Could not start source search", { description: String(error) })).finally(() => {
+              researchSubmission.current = false;
+              setSubmittingResearch(false);
+            });
           }}>
           <label htmlFor="project-source-research" className="text-sm font-medium">Find sources</label>
           <textarea id="project-source-research" rows={2} maxLength={1600}
@@ -201,8 +212,8 @@ export function ProjectSourcesPanel({ projectId, onResearch, researchReady = tru
             className="mt-2 w-full resize-y rounded-xl bg-background p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">Web · Deep Research</span>
-            <Button type="submit" size="sm" disabled={!researchReady || !researchQuery.trim()}>
-              {researchReady ? "Search sources" : "Preparing chat…"}
+            <Button type="submit" size="sm" disabled={!researchReady || !researchQuery.trim() || submittingResearch}>
+              {submittingResearch ? "Starting…" : researchReady ? "Search sources" : "Preparing chat…"}
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
@@ -219,6 +230,7 @@ export function ProjectSourcesPanel({ projectId, onResearch, researchReady = tru
           onSourcesChanged={handleLinkedSourcesChanged}
         />
       </div>
+      {isTauri && !empty && <ProjectSourceExport key={projectId} projectId={projectId} documents={documents} />}
       {empty ? (
         <div
           className={cn(

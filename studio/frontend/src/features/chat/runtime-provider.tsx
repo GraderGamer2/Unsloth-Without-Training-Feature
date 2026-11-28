@@ -3409,10 +3409,12 @@ function ThreadNewChatSwitch({
   nonce,
   paused,
   newThreadSwitchStateRef,
+  onReady,
 }: {
   nonce: string;
   paused: boolean;
   newThreadSwitchStateRef: { current: NewThreadSwitchState };
+  onReady?: (nonce: string) => void;
 }): ReactElement | null {
   const aui = useAui();
   const isLoading = useAuiState(({ threads }) => threads.isLoading);
@@ -3506,18 +3508,12 @@ function ThreadNewChatSwitch({
     ).then(
       () => {
         settleReopenClaim();
-        {
-          const switchStateNow = newThreadSwitchStateRef.current;
-          if (switchStateNow.attempt === attempt) {
-            switchStateNow.landedAttempt = attempt;
-          }
-        }
-        if (!clearAfterSwitch) return;
         const switchStateNow = newThreadSwitchStateRef.current;
-        // By attempt as well as nonce, or an older completion wipes a newer attachment.
-        if (switchStateNow.attempt !== attempt) return;
-        if (switchStateNow.activeNonce !== nonce) return;
-        clearAttachments();
+        // Old completions cannot publish readiness or clear a newer draft's attachments.
+        if (switchStateNow.attempt !== attempt || switchStateNow.activeNonce !== nonce) return;
+        switchStateNow.landedAttempt = attempt;
+        if (clearAfterSwitch) clearAttachments();
+        onReady?.(nonce);
       },
       () => {
         settleReopenClaim();
@@ -3532,7 +3528,7 @@ function ThreadNewChatSwitch({
       },
     );
     useChatRuntimeStore.getState().setActiveThreadId(null);
-  }, [aui, isLoading, newThreadSwitchStateRef, nonce, paused]);
+  }, [aui, isLoading, newThreadSwitchStateRef, nonce, onReady, paused]);
 
   // Reassert this view's thread if a stale switch lands anyway.
   useEffect(() => {
@@ -4487,6 +4483,7 @@ export function ChatRuntimeProvider({
   listThreads = true,
   backgrounded = false,
   onInitialHistoryReady,
+  onNewThreadReady,
   onCompactionCountChange,
 }: {
   children: ReactNode;
@@ -4499,6 +4496,7 @@ export function ChatRuntimeProvider({
   listThreads?: boolean;
   backgrounded?: boolean;
   onInitialHistoryReady?: () => void;
+  onNewThreadReady?: (nonce: string) => void;
   onCompactionCountChange?: (threadId: string, count: number) => void;
 }): ReactElement {
   const signalReady = useAppShellReadySignal();
@@ -4608,6 +4606,7 @@ export function ChatRuntimeProvider({
             nonce={newThreadNonce}
             paused={backgrounded}
             newThreadSwitchStateRef={newThreadSwitchStateRef}
+            onReady={onNewThreadReady}
           />
         )}
         {/* The view stays mounted (only CSS-hidden) while off-route so the run stays attached and the
