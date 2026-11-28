@@ -838,5 +838,36 @@ class ResearchImportTests(unittest.TestCase):
             snapshot(url, title, "   ")
 
 
+class ResearchSynthesisValidationTests(unittest.TestCase):
+    def test_rejects_tool_requests_and_recovers_without_rejecting_reports(self):
+        import json
+        ns = source_defs("core/research_runs.py",
+                         {"_usable_synthesis_report", "_synthesis_needs_recovery"},
+                         globals_=dict(re=re, json=json))
+        validate = ns["_usable_synthesis_report"]
+        needs = ns["_synthesis_needs_recovery"]
+        malformed = [
+            '<function name="fetch_content"><param name="url">Unsloth Docs | Unsloth Documentation</param></function>',
+            '<tool_call>{"name":"web_search","arguments":{"query":"test"}}</tool_call>',
+            '<|tool_call_start|>fetch_content',
+            '{"action":"fetch","url":"https://example.test"}',
+            '{"name":"fetch_content","arguments":{"url":"https://example.test"}}',
+            '[{"type":"function","function":{"name":"fetch_content","arguments":"{}"}}]',
+            '~~~json\n{"action":"search","query":"test"}\n~~~',
+            '## Findings\n\n<function=fetch_content>',
+        ]
+        for text in malformed:
+            self.assertEqual(validate(text, "stop"), "", text)
+            self.assertTrue(needs(text, "stop"), text)
+        valid = '## Findings\n\nThe agent uses tools.\n\n~~~xml\n<function name="fetch_content"/>\n~~~'
+        self.assertEqual(validate(valid, "stop"), valid)
+        self.assertFalse(needs(valid, "stop"))
+        self.assertTrue(needs(valid, "length"))
+        self.assertTrue(needs(valid, "tool_calls"))
+        self.assertTrue(needs(valid, "function_call"))
+        self.assertEqual(validate("  "), "")
+        self.assertEqual(validate("## Results\n\nThe API accepts a tool name."), "## Results\n\nThe API accepts a tool name.")
+
+
 if __name__ == "__main__":
     unittest.main()

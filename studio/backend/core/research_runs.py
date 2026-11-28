@@ -213,8 +213,68 @@ def _select_synthesis_report(content: str, reasoning: str) -> str:
     return reasoning_report or ""
 
 
+def _usable_synthesis_report(report: str, finish_reason: str | None = None) -> str:
+    """Reject leaked native tool requests, not legitimate code examples in a report."""
+    text = report.strip()
+    if not text or finish_reason in ("tool_calls", "function_call", "tool_use"):
+        return ""
+
+    # Inspect unquoted markup outside Markdown code fences. A technical report
+    # can legitimately show tool-call XML or JSON in fenced code or inline code.
+    fence = None
+    prose = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        opening = re.match(r"^(\x60{3,}|~{3,})", stripped)
+        if fence is not None:
+            if opening and opening[1][0] == fence[0] and len(opening[1]) >= len(fence) and not stripped[len(opening[1]):].strip():
+                fence = None
+            continue
+        if opening:
+            fence = opening[1]
+            continue
+        prose.append(line)
+    outside = "\n".join(prose)
+    # A lone fenced action is still not a report; inspect its body as well.
+    candidate = outside.strip()
+    if not candidate:
+        candidate = re.sub(r"(?m)^\s*(?:\x60{3,}|~{3,})[^\n]*$", "", text).strip()
+    raw = re.sub(r"\x60+[^\x60\n]+\x60+", "", candidate)
+    if re.search(
+        r"(?im)^\s*(?:"
+        r"</?(?:tool_call(?:s)?|function_call|function|parameter|param|arg_key|arg_value)(?=[\s=>/]|$)"
+        r"|<\|(?:tool_call(?:s)?(?:_start|_begin|_end|_section_begin|_section_end|_argument_begin)?|python_tag|content_invoke_tool_json)\|?>"
+        r"|<｜tool[▁_ ](?:call|calls)"
+        r"|\[/?TOOL_CALLS\]"
+        r"|<tool_call\|>"
+        r")",
+        raw,
+    ):
+        return ""
+    # Native providers and small models also emit standalone structured actions.
+    if candidate.startswith(("{", "[")):
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            value = None
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if (
+                "tool_calls" in item or "function_call" in item
+                or "tool_call" in item
+                or item.get("type") in ("function_call", "tool_call", "tool_use")
+                or item.get("action") in ("search", "fetch", "finish")
+                or ("name" in item and ("arguments" in item or "parameters" in item or "input" in item))
+                or ("function" in item and isinstance(item["function"], dict))
+            ):
+                return ""
+    return text
+
+
 def _synthesis_needs_recovery(report: str, finish_reason: str | None) -> bool:
-    return finish_reason == "length" or not report
+    return finish_reason == "length" or not _usable_synthesis_report(report, finish_reason)
 
 
 # Missing/unknown finish reasons may be a bare EOF, so only 'stop' counts as natural.
@@ -3160,7 +3220,9 @@ class ResearchSupervisor:
 
         def _delivered(draft: str) -> str:
             """What the reader would get: a model out of budget pads with citations validation drops."""
-            return _validate_report(draft, sources, document_sources)
+            if not _usable_synthesis_report(draft):
+                return ""
+            return _usable_synthesis_report(_validate_report(draft, sources, document_sources))
 
         def _keep_draft(
             report: str,
@@ -3174,7 +3236,9 @@ class ResearchSupervisor:
                 reason = _synthesis_length_limit_error(
                     None, requested_max_tokens = 0, inference = _run_inference_request(run)
                 ).rstrip(".")
-            text = _delivered(report).strip()
+            text = _delivered(_usable_synthesis_report(report, finish_reason)).strip()
+            if not text:
+                return
             draft = _ReportDraft(
                 text, finish_reason in _NATURAL_FINISH_REASONS and bool(text), reason
             )
@@ -3235,7 +3299,9 @@ class ResearchSupervisor:
                 max_tokens = synthesis_max_tokens,
                 on_partial = _keep_partial,
             )
-        report = _select_synthesis_report(report, synthesis_reasoning)
+        report = _usable_synthesis_report(
+            _select_synthesis_report(report, synthesis_reasoning), synthesis_finish_reason
+        )
         # Before the checks below, which can fail once the report already exists.
         _keep_draft(report, synthesis_finish_reason)
         await self._check_active(run["id"])
@@ -3251,8 +3317,10 @@ class ResearchSupervisor:
                     **synthesis_messages[0],
                     "content": (
                         synthesis_messages[0]["content"]
-                        + f"\nThe previous synthesis {recovery_reason}. Write the report "
-                        "directly without exposing analysis or reconstructing source URLs. Copy "
+                        + f"\nThe previous synthesis {recovery_reason}. Research and fetching are finished. "
+                        "Do not call tools or emit function markup, JSON actions or control tokens. "
+                        "Write the report directly from the gathered evidence, without exposing "
+                        "analysis or reconstructing source URLs. Copy "
                         "citation titles and URLs only from the supplied catalogs. Begin with the "
                         "required final-report boundary on its own line."
                     ),
@@ -3292,14 +3360,18 @@ class ResearchSupervisor:
                 recovered_report, recovery_reasoning = "", ""
                 recovery_finish_reason, recovery_usage = None, None
             synthesis_reasoning += recovery_reasoning
-            recovered = _select_synthesis_report(recovered_report, recovery_reasoning)
+            recovered = _usable_synthesis_report(
+                _select_synthesis_report(recovered_report, recovery_reasoning), recovery_finish_reason
+            )
             # A recovery reaching a natural stop wins; else the longer draft, measured post-validation.
             comparable_recovered = _delivered(recovered)
             comparable_report = _delivered(report)
             recovered_whole = (
                 bool(comparable_recovered) and recovery_finish_reason in _NATURAL_FINISH_REASONS
             )
-            take_recovery = recovered_whole or len(comparable_recovered) >= len(comparable_report)
+            take_recovery = bool(comparable_recovered) and (
+                recovered_whole or len(comparable_recovered) >= len(comparable_report)
+            )
             requested_max_tokens = recovery_max_tokens
             if take_recovery:
                 report = recovered
@@ -3319,11 +3391,12 @@ class ResearchSupervisor:
                     requested_max_tokens = requested_max_tokens,
                     inference = _run_inference_request(run),
                 ).rstrip(".")
-        report = _validate_report(report, sources, document_sources)
+        report = _delivered(_usable_synthesis_report(report, synthesis_finish_reason))
         if not report:
             raise ValueError(
-                "Local model returned no safely identifiable final report. Disable thinking or "
-                "use a compatible chat template and retry."
+                "Model returned no safely identifiable final report after synthesis recovery. "
+                "Collected sources are retained. Disable thinking or use a compatible model "
+                "and chat template before retrying."
             )
         # Notice goes above, after the validators, which must only ever see what the model wrote.
         _keep_draft(report, synthesis_finish_reason, truncation_notice)

@@ -672,7 +672,7 @@ def import_research_source(
     project_id: str, payload: ResearchSourceImport,
     subject: str = Depends(get_current_subject),
 ) -> dict:
-    """Import a recorded source from a completed research run into its own project."""
+    """Import recorded evidence from a settled research run into its own project."""
     from io import BytesIO
     from core.rag import research_source_import
     from state.tool_policy import get_tool_policy
@@ -685,12 +685,12 @@ def import_research_source(
         raise HTTPException(status_code = 403, detail = "Tools are disabled on this server")
     scope = store.project_scope(project_id)
     _raise_if_scope_retired(scope, "Project is being deleted")
-    run = research_runs_db.get_run(payload.runId)
+    run = research_runs_db.get_run(payload.runId, owner_subject = subject)
     thread = get_chat_thread(run["threadId"]) if run else None
     if not thread or thread.get("projectId") != project_id:
         raise HTTPException(status_code = 404, detail = "Research run not found in this project")
-    if run["status"] != "completed":
-        raise HTTPException(status_code = 409, detail = "Research must complete before importing sources")
+    if run["status"] not in {"completed", "failed", "cancelled"}:
+        raise HTTPException(status_code = 409, detail = "Research must stop before importing sources")
     try:
         url, title, policy = research_source_import.resolve_source(run, payload.url, payload.websitePolicy)
     except ValueError as exc:

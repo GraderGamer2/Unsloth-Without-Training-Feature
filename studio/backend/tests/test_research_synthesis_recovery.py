@@ -407,3 +407,37 @@ def test_a_cancel_during_recovery_still_stops_the_run(research_home, monkeypatch
     monkeypatch.setattr(supervisor, "_stream_completion", cancel_during_recovery)
     with pytest.raises(worker.RunCancelled):
         asyncio.run(supervisor._research(claimed))
+
+
+def test_raw_function_markup_triggers_synthesis_recovery(research_home, monkeypatch):
+    malformed = '<function name="fetch_content"><param name="url">Unsloth Docs | Unsloth Documentation</param></function>'
+    finished = _run_synthesis(
+        monkeypatch,
+        synthesis = (malformed, "", "stop", None),
+        recovery = (FIRST_DRAFT, "", "stop", None),
+    )
+    assert "synthesis_recovery" in finished["phases"]
+    assert finished["status"] == "completed"
+    assert finished["report"].strip() == FIRST_DRAFT
+    assert finished["sources"]
+
+
+def test_two_tool_requests_cannot_be_completed_as_report(research_home, monkeypatch):
+    with pytest.raises(ValueError, match = "no safely identifiable final report"):
+        _run_synthesis(
+            monkeypatch,
+            synthesis = ('<function=fetch_content>', "", "stop", None),
+            recovery = ('{"action":"fetch","url":"https://example.test"}', "", "stop", None),
+        )
+    assert research_db.get_run("run-1")["sources"]
+
+
+def test_invalid_tool_recovery_cannot_replace_valid_partial_report(research_home, monkeypatch):
+    finished = _run_synthesis(
+        monkeypatch,
+        synthesis = (FIRST_DRAFT, "", "length", {"completion_tokens": 16384}),
+        recovery = ('<tool_call>{"name":"fetch_content"}</tool_call>', "", "stop", None),
+    )
+    assert finished["status"] == "completed"
+    assert FIRST_DRAFT in finished["report"]
+    assert "Incomplete report." in finished["report"]
