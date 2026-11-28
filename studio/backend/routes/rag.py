@@ -699,12 +699,13 @@ def import_research_source(
         raise HTTPException(status_code = 429, detail = "Source importer is busy. Retry this source shortly.")
     try:
         try:
-            body = research_source_import.fetch_source_text(url, policy)
-            filename, markdown = research_source_import.snapshot(url, title, body)
+            filename, content = research_source_import.fetch_source_payload(
+                url, title, policy, config.MAX_UPLOAD_BYTES,
+            )
         except ValueError as exc:
             raise HTTPException(status_code = 422, detail = str(exc)) from exc
         stored_path, filename, content_hash = _persist_upload_stream(
-            BytesIO(markdown.encode("utf-8")), _document_label(filename),
+            BytesIO(content), _document_label(filename),
             empty_detail = "No readable source content.",
         )
         try:
@@ -717,8 +718,9 @@ def import_research_source(
                 with _rag_unavailable_as_503(stored_path):
                     document_id, job_id = ingestion.start_ingestion(
                         scope, None, None, filename, stored_path,
-                        project_id = project_id, ocr = False, caption = False,
-                        content_hash = content_hash,
+                        project_id = project_id,
+                        ocr = None if filename.lower().endswith(".pdf") else False,
+                        caption = False, content_hash = content_hash,
                         stage_slots = research_source_import.INDEX_SLOTS,
                     )
         except Exception:

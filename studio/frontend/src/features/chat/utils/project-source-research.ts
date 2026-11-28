@@ -13,5 +13,5 @@ export function projectSourceResearchQuestion(
   if (!text.startsWith("/find-sources ")) return null;
   const topic = Array.from(text.slice("/find-sources ".length).trim()).slice(0, 1600).join("");
   if (!topic) return null;
-  return "Find authoritative, relevant web sources and accessible original documents (including research papers, PDFs and reports) about the following topic. Search broadly, evaluate relevance, and identify source URLs. Prefer primary sources. Topic: " + topic;
+  return "Find useful, directly relevant sources for the user's topic. Match source types to the topic and the user's preferences: for practical software questions use maintained repositories, release notes, documentation, benchmarks and relevant community discussions; for academic questions seek research papers, DOI landing pages and accessible full-text PDF links. Prioritize recent, accessible original material, not generic official pages. Search broadly, but do not turn a practical question into a search for academic or official recognition. Prefer original source URLs over summaries, and when relevant distinguish full text from search snippets. Do not claim a source or study does not exist merely because this search did not find it. Report the useful findings and what each source contributes. Topic: " + topic;
 }

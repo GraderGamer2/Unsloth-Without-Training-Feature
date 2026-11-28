@@ -65,7 +65,7 @@ export async function watchIngestion(
   projectId: string,
   jobId: string,
   filename: string,
-): Promise<void> {
+): Promise<IndexJob | undefined> {
   for (let attempt = 0; attempt < INGEST_POLL_ATTEMPTS; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, INGEST_POLL_MS));
     let job: IndexJob;
@@ -83,8 +83,9 @@ export async function watchIngestion(
       });
     }
     announceProjectSourcesUpdated(projectId);
-    return;
+    return job;
   }
+  return undefined;
 }
 
 export async function saveMarkdownAsProjectSource(

@@ -2561,7 +2561,8 @@ function ProjectLanding({
                   </div>
                 }
               >
-                <ProjectSourcesPanel key={projectId} projectId={projectId} onResearch={startSourceResearch} />
+                <ProjectSourcesPanel key={projectId} projectId={projectId}
+                  onResearch={startSourceResearch} researchReady={active && runtimeReady && !pendingNewThreadId} />
               </Suspense>
             ) : projectTab === "files" ? (
               <Suspense

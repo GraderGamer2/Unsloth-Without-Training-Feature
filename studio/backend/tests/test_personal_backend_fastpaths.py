@@ -836,6 +836,40 @@ class ResearchImportTests(unittest.TestCase):
         self.assertEqual(snapshot(url, title, "original paper text"), (name, content))
         with self.assertRaises(ValueError):
             snapshot(url, title, "   ")
+        challenge = "# Prove your humanity\n\nWe’re committed to safety and security. But not for bots. Complete the challenge below and let us know you’re a real person."
+        with self.assertRaisesRegex(ValueError, "bot verification"):
+            snapshot(url, title, challenge)
+        with self.assertRaisesRegex(ValueError, "access-denied"):
+            snapshot(url, title, "# Access denied\n\nPlease enable JavaScript and cookies.")
+        self.assertIn("Minecraft", snapshot(url, title, "# Minecraft\n\nHow to handle a CAPTCHA in a mod.")[1])
+
+        candidate = ns["_pdf_candidate"]
+        self.assertEqual(candidate("https://arxiv.org/abs/2506.15672v2"),
+                         "https://arxiv.org/pdf/2506.15672v2")
+        self.assertEqual(candidate("https://example.org/paper.PDF?download=1"),
+                         "https://example.org/paper.PDF?download=1")
+        self.assertIsNone(candidate("https://arxiv.org.evil.example/abs/2506.15672"))
+        self.assertIsNone(candidate("https://example.org/article"))
+        fake_tools = ModuleType("core.inference.tools")
+        seen = []
+        payload = b"%PDF-1.7\noriginal content"
+        def raw_fetch(target, **kwargs):
+            seen.append((target, kwargs))
+            return None, payload, "application/pdf"
+        fake_tools._fetch_url_raw = raw_fetch
+        fake_tools._has_pdf_magic = lambda data: data.startswith(b"%PDF-")
+        with patch.dict(sys.modules, {"core.inference.tools": fake_tools}):
+            name, result = ns["fetch_source_payload"]("https://arxiv.org/abs/2506.15672", "Paper", {}, 1024)
+            self.assertTrue(name.endswith(".pdf"))
+            self.assertEqual(result, payload)
+            self.assertEqual(seen[0][0], "https://arxiv.org/pdf/2506.15672")
+            self.assertEqual(seen[0][1]["raw_bytes_max"], 1024)
+            with self.assertRaises(ValueError):
+                ns["fetch_source_payload"]("https://arxiv.org/abs/2506.15672", "Paper",
+                                           {"blockedDomains": ["arxiv.org"]}, 1024)
+            fake_tools._fetch_url_raw = lambda *a, **kw: (None, b"<html>Bot check</html>", "text/html")
+            with self.assertRaisesRegex(ValueError, "did not return a PDF"):
+                ns["fetch_source_payload"]("https://example.org/paper.pdf", "Paper", {}, 1024)
 
 
 class ResearchSynthesisValidationTests(unittest.TestCase):

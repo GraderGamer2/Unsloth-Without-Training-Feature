@@ -38,9 +38,10 @@ import {
 import { useUploadQueue } from "./use-upload-queue";
 import { linkedFolderDocumentsSummary } from "./source-folder-copy";
 
-export function ProjectSourcesPanel({ projectId, onResearch }: {
+export function ProjectSourcesPanel({ projectId, onResearch, researchReady = true }: {
   projectId: string;
   onResearch?: (question: string) => boolean;
+  researchReady?: boolean;
 }) {
   const [researchQuery, setResearchQuery] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -191,7 +192,7 @@ export function ProjectSourcesPanel({ projectId, onResearch }: {
           onSubmit={(event) => {
             event.preventDefault();
             const query = researchQuery.trim();
-            if (query && onResearch(query)) setResearchQuery("");
+            if (researchReady && query && onResearch(query)) setResearchQuery("");
           }}>
           <label htmlFor="project-source-research" className="text-sm font-medium">Find sources</label>
           <textarea id="project-source-research" rows={2} maxLength={1600}
@@ -200,10 +201,14 @@ export function ProjectSourcesPanel({ projectId, onResearch }: {
             className="mt-2 w-full resize-y rounded-xl bg-background p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">Web · Deep Research</span>
-            <Button type="submit" size="sm" disabled={!researchQuery.trim()}>Search sources</Button>
+            <Button type="submit" size="sm" disabled={!researchReady || !researchQuery.trim()}>
+              {researchReady ? "Search sources" : "Preparing chat…"}
+            </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Uses your selected AI model. Review the research plan, then choose websites and readable online documents to add to this project.
+            {researchReady
+              ? "Uses your selected AI model. Review the research plan, then choose websites and online documents to add to this project."
+              : "You can enter your topic now. Search becomes available when the project chat has initialized."}
           </p>
         </form>
       )}
