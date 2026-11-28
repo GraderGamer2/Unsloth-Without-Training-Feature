@@ -18,7 +18,7 @@ pub use types::{DesktopPreflightDisposition, DesktopPreflightResult, ExternalBac
 #[cfg(test)]
 pub(crate) use version::DESKTOP_MANAGEABILITY_VERSION;
 pub(crate) use version::{
-    backend_version_stale_reason, expected_backend_version, DESKTOP_BACKEND_MANAGEABILITY_VERSION,
+    backend_version_stale_reason, expected_backend_version, personal_backend_revision_stale_reason, DESKTOP_BACKEND_MANAGEABILITY_VERSION,
     DESKTOP_PROTOCOL_VERSION,
 };
 

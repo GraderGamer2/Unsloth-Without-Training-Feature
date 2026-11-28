@@ -851,7 +851,9 @@ fn ready_for_use_status(health: Option<&HealthResponse>) -> OwnedBackendReadines
     let version = health
         .and_then(|h| h.version.as_deref())
         .filter(|v| !v.is_empty());
-    if let Some(reason) = crate::preflight::backend_version_stale_reason(version) {
+    if let Some(reason) = crate::preflight::backend_version_stale_reason(version)
+        .or_else(|| crate::preflight::personal_backend_revision_stale_reason(version))
+    {
         return OwnedBackendReadiness::Stale { reason };
     }
     match health.and_then(|health| health.native_path_leases_supported) {

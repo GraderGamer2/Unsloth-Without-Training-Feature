@@ -241,7 +241,7 @@ def _usable_synthesis_report(report: str, finish_reason: str | None = None) -> s
         candidate = re.sub(r"(?m)^\s*(?:\x60{3,}|~{3,})[^\n]*$", "", text).strip()
     raw = re.sub(r"\x60+[^\x60\n]+\x60+", "", candidate)
     if re.search(
-        r"(?im)^\s*(?:"
+        r"(?i)(?:"
         r"</?(?:tool_call(?:s)?|function_call|function|parameter|param|arg_key|arg_value)(?=[\s=>/]|$)"
         r"|<\|(?:tool_call(?:s)?(?:_start|_begin|_end|_section_begin|_section_end|_argument_begin)?|python_tag|content_invoke_tool_json)\|?>"
         r"|<｜tool[▁_ ](?:call|calls)"

@@ -162,7 +162,8 @@ fn backend_capability_stale_reason(health: &BackendHealth) -> Option<String> {
     }
     // Unauthenticated /api/health hides `version`, so no version means auth-gated, not old.
     match health.version.as_deref() {
-        Some(version) if !version.is_empty() => backend_version_stale_reason(Some(version)),
+        Some(version) if !version.is_empty() => backend_version_stale_reason(Some(version))
+            .or_else(|| super::version::personal_backend_revision_stale_reason(Some(version))),
         _ => None,
     }
 }

@@ -855,6 +855,8 @@ class ResearchSynthesisValidationTests(unittest.TestCase):
             '[{"type":"function","function":{"name":"fetch_content","arguments":"{}"}}]',
             '~~~json\n{"action":"search","query":"test"}\n~~~',
             '## Findings\n\n<function=fetch_content>',
+            'Let me fetch this. <function name="web_search"><param name="url">Article title</param></function>',
+            '<function name="web_search"><param name="url">Title one</param></function> <function name="web_search"><param name="url">Title two</param></function>',
         ]
         for text in malformed:
             self.assertEqual(validate(text, "stop"), "", text)

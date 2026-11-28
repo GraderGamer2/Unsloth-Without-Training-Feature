@@ -258,8 +258,13 @@ export function importResearchSource(
   projectId: string, runId: string, url: string,
   websitePolicy: { allowedDomains: string[]; blockedDomains: string[] },
 ): Promise<DocumentUploadResult> {
-  return ragRequest(`/projects/${encodeURIComponent(projectId)}/research-sources`, {
+  return ragRequest<DocumentUploadResult>(`/projects/${encodeURIComponent(projectId)}/research-sources`, {
     method: "POST", body: { runId, url, websitePolicy },
+  }).catch((error: unknown) => {
+    if ((error as { status?: number } | null)?.status === 405) {
+      throw new Error("The running backend does not expose the source import endpoint. Close Unsloth fully, reopen the new AppImage and allow its backend update.");
+    }
+    throw error;
   });
 }
 

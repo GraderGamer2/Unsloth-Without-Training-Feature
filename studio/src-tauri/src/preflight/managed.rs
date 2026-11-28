@@ -1049,6 +1049,9 @@ fn managed_capability_stale_reason(bin: &Path, capability: &DesktopCapability) -
     if crate::linux_storage::personal_vulkan() && capability.supports_personal_vulkan != Some(true) {
         return Some("desktop_storage_backend_required".to_string());
     }
+    if let Some(reason) = super::version::personal_backend_revision_stale_reason(capability.version.as_deref()) {
+        return Some(reason);
+    }
     let reason = desktop_capability_stale_reason(capability)?;
     let version = capability.version.as_deref();
     if reason == "desktop_backend_version_outdated"

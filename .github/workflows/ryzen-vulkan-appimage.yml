@@ -418,6 +418,25 @@ jobs:
         run: |
           node --experimental-strip-types --test tests/parse-markdown-blocks-dollar-merge.test.ts tests/streaming-render-schedule.test.ts tests/personal-lifecycle.test.ts
 
+      - name: Stamp personal backend package revision
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          path = Path("unsloth/_version.py")
+          run_id = int(os.environ["GITHUB_RUN_ID"])
+          attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+          assert 0 < attempt < 10000
+          revision = run_id * 10000 + attempt
+          updated, count = re.subn(
+              r'(?m)^__version__ = "(\d+\.\d+\.\d+)(?:\.post\d+)?"$',
+              lambda match: f'__version__ = "{match[1]}.post{revision}"',
+              path.read_text(),
+          )
+          assert count == 1
+          path.write_text(updated)
+          PY
+
       - name: Compile Zen 3 desktop and inference-only backend
         run: |
           export CARGO_TARGET_DIR="$RUNNER_TEMP/ryzen-work/tauri-target"
@@ -430,6 +449,29 @@ jobs:
           assert len(wheels) == 1, wheels
           with ZipFile(wheels[0]) as wheel:
               assert "studio/backend/personal-vulkan" in wheel.namelist()
+              import os, ast
+              from email.parser import BytesParser
+              from email.policy import default
+              revision = int(os.environ["GITHUB_RUN_ID"]) * 10000 + int(os.environ["GITHUB_RUN_ATTEMPT"])
+              metadata, = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+              version = BytesParser(policy=default).parsebytes(wheel.read(metadata))["Version"]
+              assert version.endswith(f".post{revision}"), version
+              assert wheels[0].name.startswith(f"unsloth-{version}-"), wheels[0]
+              for path in (
+                  "studio/backend/core/research_runs.py",
+                  "studio/backend/core/research/prompts.py",
+                  "studio/backend/routes/rag.py",
+                  "studio/backend/core/rag/research_source_import.py",
+              ):
+                  assert wheel.read(path) == Path(path).read_bytes(), path
+              route_tree = ast.parse(wheel.read("studio/backend/routes/rag.py"))
+              route = next(node for node in route_tree.body if isinstance(node, ast.FunctionDef)
+                           and node.name == "import_research_source")
+              assert any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                         and d.func.attr == "post" and d.args
+                         and isinstance(d.args[0], ast.Constant)
+                         and d.args[0].value == "/projects/{project_id}/research-sources"
+                         for d in route.decorator_list)
           PY
 
       - name: Measure dependency caches and apply size budgets

@@ -190,6 +190,36 @@ pub(super) fn backend_version_outdated_reason(
 
 // Managed venv only: the shared venv can clear the floor yet predate this app, and only repair
 // moves it. Running backends keep the floor alone so older ones stay adoptable.
+/// Personal AppImages must use their own bundled backend revision, including rollback.
+pub(crate) fn personal_backend_revision_stale_reason(version: Option<&str>) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_storage::personal_vulkan() {
+        if let Some(expected) = crate::linux_storage::bundled_backend_version() {
+            return personal_revision_mismatch(version, expected);
+        }
+    }
+    let _ = version;
+    None
+}
+
+fn personal_revision_mismatch(version: Option<&str>, expected: &str) -> Option<String> {
+    (version != Some(expected)).then(|| "desktop_backend_revision_mismatch".to_string())
+}
+
+#[cfg(test)]
+mod personal_revision_tests {
+    use super::personal_revision_mismatch;
+
+    #[test]
+    fn personal_bundle_requires_exact_backend_revision() {
+        let expected = "2026.11.11.post123";
+        assert_eq!(personal_revision_mismatch(Some(expected), expected), None);
+        for version in [None, Some("2026.11.11"), Some("2026.11.11.post122"), Some("2026.11.11.post124")] {
+            assert_eq!(personal_revision_mismatch(version, expected).as_deref(), Some("desktop_backend_revision_mismatch"));
+        }
+    }
+}
+
 pub(super) fn managed_backend_version_stale_reason(version: Option<&str>) -> Option<String> {
     backend_version_outdated_reason(version, expected_backend_version())
 }
