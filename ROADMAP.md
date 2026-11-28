@@ -20,9 +20,16 @@ Read [AGENTS.md](AGENTS.md) before implementation.
 - Audit whether Node/npm is required for specific retained tools (not for the precompiled desktop UI); do not repeatedly provision it on backend-only updates, and do not remove required runtimes blindly. Audit uv/npm cache growth and generated-module paths; prefer safe, scoped cleanup of obsolete application-owned cache entries, never shared caches or user assets without authorization.
 - Acceptance: upgrade and downgrade between two different bundled backend versions with a healthy installed environment and networking disabled; no dependency downloads, no Node setup, no full setup.sh pass, no unnecessary cache growth; new backend routes present and healthy; all user data preserved. Test initial install and genuine repair separately. No application code change or build has been initiated by recording this issue.
 
+## 1b. High-priority Sources readiness regression (owner runtime report, 2026-11-28)
+
+- **Pending fix; reproduced by owner:** on the latest build, opening a project's Sources search without first using ordinary chat leaves the control at "Preparing chat…" or produces a readiness toast. Sending a message in an ordinary chat (including the project's new-chat composer) and returning to Sources makes search work. The user must never have to send a dummy message to unlock Sources.
+- **Code inspection:** `studio/frontend/src/features/chat/chat-page.tsx` gates Sources on `active && runtimeReady && !pendingNewThreadId`. `projectRuntimeReady` is keyed by project ID and set via `onInitialHistoryReady`; `runtime-provider.tsx` signals this from the history adapter's load completion. `startSourceResearch` also requires a mounted composer form and submits via a double animation-frame callback with project ownership checks. These are confirmed dependencies, not proof of the exact event sequence on the owner's machine. The latest visible readiness label did not resolve initialization.
+- **Required fix:** explicitly initialize or await the actual project-scoped research/composer readiness on the Sources path, including a fresh empty project, independently of whether ordinary chat history has loaded or a message has been sent. Prefer reusing the same runtime/run orchestration with a purpose-specific entry point. Preserve queries while preparing; bind readiness and queued work to the current project and session/nonce, invalidate stale events, handle cancellation and switching, reject duplicate runs, and expose genuine initialization errors with retry. Do not merely remove safety checks or generate dummy messages, extra chats, model downloads, or unnecessary model reloads.
+- Acceptance: on a cold AppImage start, with a configured/loaded model, open an existing or empty project and immediately search Sources without using any ordinary chat; the request starts once when ready, remains project-scoped, and never hangs indefinitely. Test warm startup, failed initialization/retry, rapid repeated submission, switching projects during preparation, cancellation and a preexisting ordinary chat draft. Preserve drafts, existing sources and user data. No code fix or application build has yet been performed for this report.
+
 ## 2. Priority and workflow
 
-1. Resolve owner-reported runtime bugs and regressions first, including the repeated AppImage setup/download regression in section 1a. Diagnose rather than merely hide symptoms.
+1. Resolve owner-reported runtime bugs and regressions first, including the repeated AppImage setup/download regression in section 1a and the Sources readiness regression in section 1b. Diagnose rather than merely hide symptoms.
 2. Verify the current build with the owner's feedback, including readiness, report synthesis, source import and PDF behavior.
 3. Implement the research expansion below as a coherent, tested batch, reusing existing architecture.
 4. Resume broader performance work only after research and source ingestion are reliable.
@@ -54,6 +61,15 @@ Both modes use automatic query expansion, complementary search providers, academ
 ## 5. Source discovery and original file ingestion
 
 Extend the existing Unsloth project Sources panel and Deep Research engine, not a second NotebookLM-style architecture. A user enters a topic, researches, reviews discovered sources and chooses which become permanent project sources. Allow additional imports across runs, manual additions/removals using existing controls, retry of failed imports, and no new project-wide source-count quota.
+
+### 5a. Dedicated source-discovery experience (owner requirement, 2026-11-28)
+
+- **Sources search is not ordinary Deep Research chat.** Both Deep Research and Exhaustive Research remain available as discovery-depth choices, sharing the same safe discovery, fetch, verification and ranking engine. Distinguish run purpose (source discovery versus report-oriented chat) from research depth.
+- A query submitted from a project's Sources search bar stays in the Sources workflow: show concise progress/cancel controls while searching and, on completion, a source-selection prompt/list only. Do not output a normal research report, long narrative synthesis, or ordinary chat transcript; do not require a separate chat or plan-approval conversation merely to discover sources. Internal planning and coverage checks may still run. Skip final report synthesis entirely for source-discovery runs rather than generate it and hide it.
+- The result lists deduplicated relevant sources with title, URL, type and availability/extraction status; concise relevance metadata is acceptable, not an essay. Provide individual checkboxes, Select all, Deselect all, Keep selected, and Discard all/close without saving. Only explicitly confirmed selections are imported via existing native project ingestion/RAG; unselected candidates are not persisted as project sources. Report actual indexing success/failure and allow retries. Do not silently add sources or remove existing ones when discarding candidates.
+- Keep the results and selection scoped to the originating project/run, including partial results on cancellation/failure where available; preserve drafts and other chats. No unwanted ordinary chat threads or messages as a side effect. Reuse existing research-run state, permission checks, ingestion and storage; no parallel database or RAG pipeline.
+- Main-chat Deep Research and Exhaustive Research remain report-oriented and retain their existing ability to optionally import discovered sources. Do not remove or degrade normal chat research to implement Sources discovery.
+- Acceptance: from a cold project landing, submit a query in each mode; show only progress followed by the source-selection UI, without ordinary report generation or dummy chat. Verify keep-all, arbitrary subset, deselect-all/discard, failed/partial search, indexing retry and project-switch isolation; normal chat still produces a report. Verify no report-synthesis model call occurs for source-only runs and no automatic permanent imports occur. Pending implementation and local runtime verification.
 
 Support relevant accessible formats through existing native parsers and ingestion where possible:
 - HTML/webpages: extract useful main content, tables and relevant links; remove navigation/ads/challenge pages.
@@ -90,7 +106,8 @@ Show meaningful per-source states: discovered, downloading, extracted, submitted
 ## 8. Acceptance tests for the next implementation batch
 
 Add automated regression coverage and report feasible test results before one consolidated build. Include:
-- Source search initialization and safe project-scoped submission; cancellation and project switching.
+- Source search initialization from a cold launch without ordinary chat; safe project-scoped submission, failure/retry, cancellation, query preservation and project switching.
+- Dedicated Sources-only output and explicit keep/discard workflow in both modes (section 5a); skip report synthesis, no unwanted chat creation, select all/subset/none, no automatic import, normal chat report behavior unchanged.
 - Research synthesis with a small model, malformed tool output, successful recovery and failed/stopped source retention.
 - Practical community/software research (e.g. Minecraft 1.12.2 optimization) without irrelevant academic/official bias.
 - Academic research discovering accessible full-text PDFs; verified native indexing of PDF, DOCX, XLSX and other supported formats including misleading URL extensions/MIME types.
