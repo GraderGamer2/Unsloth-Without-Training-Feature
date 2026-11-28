@@ -81,7 +81,7 @@ export function ResearchSourceImport({ run }: { run: ResearchRun }) {
       </Button>
       {expanded && <div className="mt-3 space-y-3">
         <p className="text-xs text-muted-foreground">
-          Fetch original accessible source content, not the AI report. Direct PDFs and supported arXiv links are saved as PDF files; other web pages are saved as text snapshots. Added sources use the project's normal embedding and retrieval settings.
+          Fetch original accessible source content, not the AI report. Supported PDF, Office, OpenDocument, EPUB and text downloads retain their original bytes. Web pages are saved as readable text snapshots; unsupported image or binary formats report an error. Added sources use the project's normal embedding and retrieval settings.
         </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={remaining.length > 0 && count === remaining.length} disabled={busy || !remaining.length}

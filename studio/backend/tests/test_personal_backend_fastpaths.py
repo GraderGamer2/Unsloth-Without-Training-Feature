@@ -886,6 +886,51 @@ class ResearchImportTests(unittest.TestCase):
                 ns["fetch_source_payload"]("https://example.org/paper.pdf", "Paper", {}, 1024)
 
 
+class ResearchNativeFormatTests(unittest.TestCase):
+    def test_original_document_format_detection(self):
+        import io
+        import zipfile
+        policy = ModuleType("core.inference.web_access_policy")
+        policy.check_url_access = lambda *_: (True, "", "example.org")
+        policy.normalize_website_policy = lambda *_: {}
+        fake_tools = ModuleType("core.inference.tools")
+        fake_tools._has_pdf_magic = lambda data: data.startswith(b"%PDF-")
+        with patch.dict(sys.modules, {"core.inference.web_access_policy": policy,
+                                      "core.inference.tools": fake_tools}):
+            ns = runpy.run_path(str(BACKEND / "core/rag/research_source_import.py"))
+            detect = ns["_native_binary_extension"]
+            def archive(entries):
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w") as out:
+                    for name, data in entries.items():
+                        out.writestr(name, data)
+                return buf.getvalue()
+            for extension, part, mime in (
+                (".docx", "word/document.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"),
+                (".xlsx", "xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"),
+                (".pptx", "ppt/presentation.xml", "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"),
+            ):
+                data = archive({"[Content_Types].xml": f'<Override ContentType="{mime}"/>', part: "<content/>"})
+                self.assertEqual(detect(data), extension)
+                fake_tools._fetch_url_raw = lambda *a, **kw: (None, data, "application/octet-stream")
+                name, returned = ns["fetch_source_payload"]("https://example.org/download?id=1", "Document", {}, 1024 * 1024)
+                self.assertTrue(name.endswith(extension))
+                self.assertEqual(returned, data)
+            self.assertEqual(detect(archive({"mimetype": "application/vnd.oasis.opendocument.text",
+                                             "content.xml": "<content/>"})), ".odt")
+            self.assertEqual(detect(archive({"mimetype": "application/epub+zip",
+                                             "META-INF/container.xml": "<container/>"})), ".epub")
+            self.assertEqual(detect(b"{\\rtf1 example}"), ".rtf")
+            for data in (
+                archive({"random.txt": "not an office document"}),
+                archive({"../escape": "bad", "mimetype": "application/epub+zip"}),
+                archive({"mimetype": "application/epub+zip"}),
+            ):
+                with self.assertRaises(ValueError):
+                    detect(data)
+            self.assertIsNone(detect(b"plain text"))
+
+
 class ResearchSynthesisValidationTests(unittest.TestCase):
     def test_rejects_tool_requests_and_recovers_without_rejecting_reports(self):
         import json

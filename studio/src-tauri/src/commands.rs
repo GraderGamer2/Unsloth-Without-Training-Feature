@@ -935,6 +935,38 @@ pub async fn start_managed_repair(
         .unwrap_or_else(|| diagnostics::begin_repair_group(&diagnostics_state));
 
     #[cfg(target_os = "linux")]
+    if !force_installer && crate::linux_storage::personal_vulkan() &&
+        crate::linux_storage::bundled_backend_version().is_some() &&
+        managed_install_not_ready_after_repair().await.as_deref() == Some("desktop_backend_revision_mismatch")
+    {
+        let _ = app.emit("repair-progress", "Updating bundled backend offline (keeping installed dependencies)...");
+        let result = tokio::task::spawn_blocking(crate::linux_storage::replace_personal_backend_offline)
+            .await.map_err(|error| format!("Offline backend update task failed: {error}"))
+            .and_then(|result| result);
+        match result {
+            Ok(None) => {
+                if let Some(reason) = managed_install_not_ready_after_repair().await {
+                    let msg = repair_not_ready_message(&reason);
+                    diagnostics::finish_repair_group(&diagnostics_state, &repair_group_id, "failed", Some(msg.clone()));
+                    let _ = app.emit("repair-failed", &msg);
+                    return Err(msg);
+                }
+                diagnostics::finish_repair_group(&diagnostics_state, &repair_group_id, "success", None);
+                let _ = app.emit("repair-complete", ());
+                return Ok(());
+            }
+            Ok(Some(reason)) => {
+                let _ = app.emit("repair-progress", format!("{reason}. A full repair may require downloads."));
+            }
+            Err(msg) => {
+                diagnostics::finish_repair_group(&diagnostics_state, &repair_group_id, "failed", Some(msg.clone()));
+                let _ = app.emit("repair-failed", &msg);
+                return Err(msg);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     let use_installer = force_installer || crate::linux_storage::bundled_backend_version().is_some();
     #[cfg(not(target_os = "linux"))]
     let use_installer = force_installer;

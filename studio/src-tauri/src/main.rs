@@ -2721,6 +2721,11 @@ fn main() {
             }) {
                 warn!("Legacy staged update cleanup deferred: {error}");
             }
+            // Recover the package-only transaction before starting the CLI probe.
+            #[cfg(target_os = "linux")]
+            if linux_storage::personal_wheel_recovery_pending() {
+                linux_storage::recover_personal_wheel_update().map_err(std::io::Error::other)?;
+            }
             if let Err(error) = desktop_backend_owner::ensure_installed_studio_root_id() {
                 warn!("Desktop backend ownership id unavailable: {error}");
             }

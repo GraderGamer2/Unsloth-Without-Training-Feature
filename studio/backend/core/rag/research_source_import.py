@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import posixpath
 import re
 import threading
-from urllib.parse import unquote_plus, urldefrag, urlsplit, urlunsplit
+import zipfile
+from urllib.parse import unquote, unquote_plus, urldefrag, urlsplit, urlunsplit
 
 from core.inference.web_access_policy import check_url_access, normalize_website_policy
 
@@ -75,30 +78,215 @@ def _pdf_candidate(url):
     return None
 
 
-def fetch_source_payload(url, title, policy, max_upload_bytes):
-    """Return original PDF bytes or a validated web-text snapshot, using the native fetcher."""
-    candidate = _pdf_candidate(url)
-    if candidate is not None:
-        from core.inference.tools import _fetch_url_raw, _has_pdf_magic
-        import time
+# Keep acquisition limits separate from the number of sources in a project.
+_MAX_REMOTE_BYTES = 32 * 1024 * 1024
+_MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+_MAX_MEMBER_BYTES = 64 * 1024 * 1024
+_MAX_ARCHIVE_MEMBERS = 10_000
+_MAX_SNAPSHOT_CHARS = 1_000_000
+_ODF_MIME = {
+    b"application/vnd.oasis.opendocument.text": ".odt",
+    b"application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    b"application/vnd.oasis.opendocument.presentation": ".odp",
+    b"application/vnd.oasis.opendocument.text-template": ".ott",
+    b"application/vnd.oasis.opendocument.spreadsheet-template": ".ots",
+    b"application/vnd.oasis.opendocument.presentation-template": ".otp",
+    b"application/epub+zip": ".epub",
+}
+# The package structure, not a URL or declared MIME type, distinguishes these.
+_OOXML_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml": ".docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml": ".dotx",
+    "application/vnd.ms-word.document.macroenabled.main+xml": ".docm",
+    "application/vnd.ms-word.template.macroenabledtemplate.main+xml": ".dotm",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml": ".xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml": ".xltx",
+    "application/vnd.ms-excel.sheet.macroenabled.main+xml": ".xlsm",
+    "application/vnd.ms-excel.template.macroenabled.main+xml": ".xltm",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml": ".pptx",
+    "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml": ".potx",
+    "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml": ".ppsx",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.main+xml": ".pptm",
+    "application/vnd.ms-powerpoint.template.macroenabled.main+xml": ".potm",
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.main+xml": ".ppsm",
+}
+_TEXT_MIME = {
+    "text/csv": ".csv", "text/tab-separated-values": ".tsv",
+    "application/json": ".json", "application/xml": ".xml", "text/xml": ".xml",
+    "application/yaml": ".yaml", "text/yaml": ".yaml", "text/markdown": ".md",
+    "text/plain": ".txt", "text/x-python": ".py",
+}
+_TEXT_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts",
+    ".jsx", ".tsx", ".c", ".h", ".cpp", ".hpp", ".rs", ".go", ".java", ".sh",
+    ".sql", ".rst", ".tex", ".bib", ".log", ".css",
+}
+_BINARY_SUFFIXES = set(_OOXML_TYPES.values()) | set(_ODF_MIME.values()) | {
+    ".pdf", ".doc", ".xls", ".ppt", ".rtf",
+}
 
-        allowed, reason, _ = check_url_access(candidate, policy)
-        if not allowed:
-            raise ValueError(reason)
-        # The normal upload cap applies too; keep the in-memory download bounded
-        # even when local uploads are configured to be unlimited.
-        cap = min(max_upload_bytes or (32 * 1024 * 1024), 32 * 1024 * 1024)
-        error, data, _ = _fetch_url_raw(
-            candidate, timeout = 60, deadline = time.monotonic() + 60,
-            cancel_event = threading.Event(), website_policy = policy,
-            raw_bytes_max = cap,
-        )
-        if error:
-            raise ValueError(str(error)[:500])
-        if not isinstance(data, bytes) or not _has_pdf_magic(data):
-            raise ValueError("The PDF link did not return a PDF file; it may require login or be blocked.")
-        return _source_filename(url, title, ".pdf"), data
-    name, markdown = snapshot(url, title, fetch_source_text(url, policy))
+
+def _archive_extension(data):
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) > _MAX_ARCHIVE_MEMBERS:
+                raise ValueError("Document archive contains too many entries.")
+            names = set()
+            total = 0
+            for member in members:
+                name = member.filename.rstrip("/")
+                if (not name or name.startswith("/") or "\\" in name
+                    or any(part in {"", ".", ".."} for part in name.split("/"))
+                    or name.casefold() in names or member.flag_bits & 1
+                    or (member.external_attr >> 16) & 0o170000 == 0o120000):
+                    raise ValueError("Document archive contains unsafe, duplicate or encrypted entries.")
+                names.add(name.casefold())
+                total += member.file_size
+                if member.file_size > _MAX_MEMBER_BYTES or total > _MAX_ARCHIVE_BYTES:
+                    raise ValueError("Expanded document archive exceeds the safe parsing limit.")
+            if "mimetype" in names:
+                name = next(item.filename for item in members if item.filename.casefold() == "mimetype")
+                if archive.getinfo(name).file_size > 256:
+                    raise ValueError("Invalid document media type.")
+                ext = _ODF_MIME.get(archive.read(name).strip())
+                if ext:
+                    # Do not treat an arbitrary ZIP with a forged mimetype as an office file.
+                    required = "meta-inf/container.xml" if ext == ".epub" else "content.xml"
+                    if required not in names:
+                        raise ValueError("Document archive is missing its required content.")
+                    return ext
+            if "[content_types].xml" in names:
+                name = next(item.filename for item in members if item.filename.casefold() == "[content_types].xml")
+                if archive.getinfo(name).file_size > 1024 * 1024:
+                    raise ValueError("Document content-type catalog exceeds the safe parsing limit.")
+                catalog = archive.read(name).lower()
+                # Inspect the declared main-part type without executing or expanding XML.
+                matches = {ext for mime, ext in _OOXML_TYPES.items() if
+                           (b'"' + mime.encode() + b'"') in catalog or
+                           (b"'" + mime.encode() + b"'") in catalog}
+                if len(matches) == 1:
+                    ext = matches.pop()
+                    required = ("word/document.xml" if ext.startswith((".doc", ".dot"))
+                                else "xl/workbook.xml" if ext.startswith(".xl")
+                                else "ppt/presentation.xml")
+                    if required in names:
+                        return ext
+                raise ValueError("Unsupported or malformed Office document archive.")
+    except (zipfile.BadZipFile, RuntimeError, OSError) as exc:
+        raise ValueError("Invalid or encrypted document archive.") from exc
+    raise ValueError("This archive is not a supported Office, OpenDocument or EPUB file.")
+
+
+def _native_binary_extension(data):
+    from core.inference.tools import _has_pdf_magic
+    if _has_pdf_magic(data):
+        return ".pdf"
+    if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return _archive_extension(data)
+    if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        from core.rag.cfb import CompoundFile, CompoundFileError
+        try:
+            document = CompoundFile(data)
+            if document.exists("EncryptedPackage"):
+                raise ValueError("The document is password protected.")
+            found = [ext for ext, streams in (
+                (".doc", ("WordDocument",)), (".xls", ("Workbook", "Book")),
+                (".ppt", ("PowerPoint Document",)),
+            ) if any(document.exists(stream) for stream in streams)]
+            if len(found) == 1:
+                return found[0]
+        except CompoundFileError as exc:
+            raise ValueError("Invalid legacy Office document.") from exc
+        raise ValueError("Unsupported or ambiguous legacy Office document.")
+    if data.lstrip().startswith(b"{\\rtf"):
+        return ".rtf"
+    return None
+
+
+def _suffix(name):
+    return posixpath.splitext(unquote(str(name or "")))[1].casefold()
+
+
+def fetch_source_payload(url, title, policy, max_upload_bytes):
+    """Preserve supported native bytes, otherwise extract a truthful web-text snapshot."""
+    from importlib import import_module
+    import time
+    tools = import_module("core.inference.tools")
+
+    candidate = _pdf_candidate(url) or url
+    allowed, reason, _ = check_url_access(candidate, policy)
+    if not allowed:
+        raise ValueError(reason)
+    # Preserve the existing GitHub README/blob handling for repository pages.
+    if _pdf_candidate(url) is None and urlsplit(url).hostname == "github.com":
+        name, markdown = snapshot(url, title, fetch_source_text(url, policy))
+        return name, markdown.encode("utf-8")
+    cap = min(max_upload_bytes or _MAX_REMOTE_BYTES, _MAX_REMOTE_BYTES)
+    meta = {}
+    error, data, content_type = tools._fetch_url_raw(
+        candidate, timeout = 60, deadline = time.monotonic() + 60,
+        cancel_event = threading.Event(), website_policy = policy,
+        raw_bytes_max = cap, meta_out = meta,
+    )
+    if error:
+        raise ValueError(str(error)[:500])
+    if not isinstance(data, bytes) or not data:
+        raise ValueError("The source returned no readable content.")
+    extension = _native_binary_extension(data)
+    if extension:
+        return _source_filename(url, title, extension), data
+    if _pdf_candidate(url):
+        raise ValueError("The PDF link did not return a PDF file; it may require login or be blocked.")
+    mime = (content_type or "").split(";", 1)[0].strip().lower()
+    filename_suffix = _suffix(meta.get("filename"))
+    url_suffix = _suffix(urlsplit(meta.get("url") or url).path)
+    if mime.startswith("image/") or data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")):
+        raise ValueError("This is an image. Standalone image OCR/vision indexing is not yet supported by the project importer.")
+    if filename_suffix in _BINARY_SUFFIXES or url_suffix in _BINARY_SUFFIXES:
+        raise ValueError("The download did not contain the requested document format; it may require login or be blocked.")
+    if tools._has_binary_magic(data) or (mime != "application/octet-stream" and not tools._is_text_candidate_content_type(mime)):
+        raise ValueError("The source returned an unsupported binary format.")
+    from core.rag.parsers import _decode_text
+    # Native text decoding supports BOMs, non-UTF-8 sources and HTML meta charsets.
+    # Use the HTTP charset when valid, retaining the native decoder as a fallback.
+    from codecs import lookup
+    charset = meta.get("charset")
+    text = None
+    if charset:
+        try:
+            text = data.decode(lookup(charset).name)
+        except (LookupError, ValueError, UnicodeError, TypeError):
+            pass
+    if text is None:
+        text = _decode_text(data, html = "html" in mime or tools._looks_like_html(data[:4096].decode("latin-1")))
+    if tools._looks_binary(text):
+        raise ValueError("The source returned binary data disguised as text.")
+    is_html = "html" in mime or tools._looks_like_html(text)
+    if is_html:
+        # The raw fetcher checks HTTP redirects; the ordinary page fetcher also
+        # follows HTML meta refresh through the same SSRF/website-policy gate.
+        if tools._meta_refresh_target(data, meta.get("url") or url):
+            body = fetch_source_text(url, policy)
+        else:
+            body = tools._render_page(("html", meta.get("url") or url, text), _MAX_SNAPSHOT_CHARS)
+        name, markdown = snapshot(url, title, body)
+        return name, markdown.encode("utf-8")
+    reason = _challenge_page_reason(text)
+    if reason:
+        raise ValueError(reason)
+    # A real text attachment is saved byte-for-byte. A generic text response
+    # without a filename stays a snapshot to retain its source URL.
+    extension = next((ext for ext in (filename_suffix, url_suffix) if ext in _TEXT_SUFFIXES), None)
+    if mime == "application/octet-stream" and not extension:
+        raise ValueError("The source returned an unidentified binary download.")
+    extension = extension or (_TEXT_MIME.get(mime) if mime != "text/plain" else None)
+    if extension:
+        if not text.strip():
+            raise ValueError("The source contains no extractable text.")
+        return _source_filename(url, title, extension), data
+    name, markdown = snapshot(url, title, text)
     return name, markdown.encode("utf-8")
 
 

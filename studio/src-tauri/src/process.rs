@@ -435,16 +435,9 @@ struct StudioManagedRuntimeLaunchGuard {
     file: std::fs::File,
 }
 
-#[cfg(unix)]
-impl Drop for StudioManagedRuntimeLaunchGuard {
-    fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
-}
+// On Unix the lock belongs to the open file description. Closing the last
+// descriptor releases it. Do not explicitly unlock: the offline wheel helper
+// can pass the descriptor to uv, which must retain it if the desktop exits.
 
 #[cfg(windows)]
 fn acquire_named_studio_runtime_launch_guard(
@@ -650,6 +643,34 @@ fn acquire_file_studio_runtime_launch_guard(
         return Err(STUDIO_RUNTIME_GATE_BUSY.to_string());
     }
     Err(format!("Could not acquire the Unsloth runtime lock: {error}"))
+}
+
+/// Keep the same runtime lock open in the helper and its uv subprocess if the
+/// desktop is killed mid-update. FD_CLOEXEC is cleared only in the spawned child.
+#[cfg(target_os = "linux")]
+pub(crate) fn run_personal_wheel_command(
+    root: &std::path::Path,
+    command: &mut Command,
+) -> Result<std::process::Output, String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    let guard = acquire_studio_runtime_launch_guard()?;
+    crate::staged_update::reconcile_before_update(root)?;
+    let fd = guard.file.as_raw_fd();
+    command.env("UNSLOTH_PERSONAL_WHEEL_LOCK_FD", fd.to_string());
+    // SAFETY: fcntl is async-signal-safe and the FD is owned by guard until
+    // the child finishes. No allocation or lock acquisition in pre_exec.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let output = command.output().map_err(|error| error.to_string());
+    drop(guard);
+    output
 }
 
 #[cfg(unix)]

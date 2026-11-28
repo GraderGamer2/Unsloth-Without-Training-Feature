@@ -789,12 +789,15 @@ def project_document_export_url(
         representation = "stored file"
         source_url = None
         if re.search(r"\[web-[0-9a-f]{10}\]\.md$", filename):
-            # Legacy research snapshots carry the original URL in their first line.
-            representation = "web text snapshot"
+            # A retained Markdown download can also carry a URL marker in its
+            # filename. Only the actual snapshot header identifies a derivative.
             try:
                 with open(path, "r", encoding = "utf-8") as source:
                     first = source.readline(8192).strip()
-                if first.startswith("Original URL: "):
+                    source.readline(8192)
+                    header = source.readline(8192).strip()
+                if first.startswith("Original URL: ") and header == "Imported source text (web extraction may be incomplete).":
+                    representation = "web text snapshot"
                     source_url = first[len("Original URL: "):]
             except (OSError, UnicodeError):
                 pass

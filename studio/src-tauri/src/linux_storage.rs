@@ -128,6 +128,52 @@ pub(crate) fn bundled_backend_version() -> Option<&'static str> {
         .next()
 }
 
+// The Python helper is embedded in the desktop binary, not loaded from the
+// old backend being replaced. It is executed only while the runtime gate is held.
+const PERSONAL_WHEEL_UPDATE: &str = include_str!("../linux/personal-wheel-update.py");
+
+fn personal_wheel_command(root: &Path) -> Command {
+    let mut command = Command::new(root.join("unsloth_studio/bin/python"));
+    command.args(["-I", "-B", "-c", PERSONAL_WHEEL_UPDATE]).arg(root);
+    crate::process::scrub_appimage_python_env(&mut command);
+    command.current_dir(root);
+    command.env("UNSLOTH_STUDIO_HOME", root);
+    command
+}
+
+pub(crate) fn personal_wheel_recovery_pending() -> bool {
+    personal_vulkan() && crate::studio_home::studio_root().is_some_and(|root|
+        root.join("unsloth_studio/.personal-wheel-rollback").symlink_metadata().is_ok())
+}
+
+pub(crate) fn recover_personal_wheel_update() -> Result<(), String> {
+    if !personal_vulkan() { return Ok(()); }
+    let Some(root) = crate::studio_home::studio_root() else { return Ok(()); };
+    if !personal_wheel_recovery_pending() { return Ok(()); }
+    let output = crate::process::run_personal_wheel_command(
+        &root, personal_wheel_command(&root).arg("--recover"))
+        .map_err(|error| format!("Could not restore interrupted backend update: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("Could not restore interrupted backend update: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(())
+}
+
+/// Ok(Some(reason)) means an incompatible environment, not a mutation failure.
+pub(crate) fn replace_personal_backend_offline() -> Result<Option<String>, String> {
+    let root = crate::studio_home::studio_root().ok_or("Managed Studio root unavailable")?;
+    let wheel = BACKEND_WHEEL.get().ok_or("Bundled backend wheel unavailable")?;
+    let expected = bundled_backend_version().ok_or("Bundled backend version unavailable")?;
+    let output = crate::process::run_personal_wheel_command(
+        &root, personal_wheel_command(&root).arg(wheel).arg(expected))
+        .map_err(|error| format!("Offline backend update could not start: {error}"))?;
+    if output.status.success() { return Ok(None); }
+    if output.status.code() == Some(42) {
+        return Ok(Some(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+    }
+    Err(format!("Offline backend update failed: {}", String::from_utf8_lossy(&output.stderr)))
+}
+
 pub(crate) fn configured() -> bool {
     std::env::var_os(FIXED_STORAGE_ENV).is_some_and(|value| value == "1")
 }
